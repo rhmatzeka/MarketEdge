@@ -23,6 +23,7 @@ import android.text.TextUtils
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -72,6 +73,11 @@ import org.json.JSONObject
 
 private const val NOTIFICATION_PERMISSION_REQUEST = 10
 private const val AUDIO_PERMISSION_REQUEST = 20
+private const val ACCESSIBILITY_PREFS = "marketedge_accessibility"
+private const val KEY_VOICE_PROMPT_ANSWERED = "voice_prompt_answered"
+private const val KEY_VOICE_ASSISTANT_ENABLED = "voice_assistant_enabled"
+private const val KEY_VOICE_PROMPT_VERSION = "voice_prompt_version"
+private const val CURRENT_VOICE_PROMPT_VERSION = 4
 
 class MainActivity : AppCompatActivity() {
     private val apiClient = PublicApiClient()
@@ -119,13 +125,20 @@ class MainActivity : AppCompatActivity() {
     private var currentArticleBackAction: (() -> Unit)? = null
     private lateinit var content: FrameLayout
     private lateinit var bottomNav: BottomNavigationView
+    private lateinit var voiceDock: FrameLayout
     private var textToSpeech: TextToSpeech? = null
     private var speechRecognizer: SpeechRecognizer? = null
     private var ttsReady = false
     private var voiceListening = false
     private var listenAfterUtteranceId: String? = null
+    private var listenAfterMode: VoiceCaptureMode? = null
+    private var listenAfterPrompt: String = ""
     private var pendingPermissionMode: VoiceCaptureMode? = null
     private var voiceCaptureMode = VoiceCaptureMode.COMMAND
+    private var voicePromptAnswered = false
+    private var voiceAssistantEnabled = false
+    private var voiceOnboardingOverlay: View? = null
+    private var voiceOnboardingSpoken = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,9 +146,16 @@ class MainActivity : AppCompatActivity() {
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = getColor(R.color.marketedge_surface)
         setupHardwareBack()
+        loadVoiceAccessibilityChoice()
         setupVoiceAccessibility()
-        requestNotificationPermission()
         showSplash()
+    }
+
+    private fun loadVoiceAccessibilityChoice() {
+        val prefs = getSharedPreferences(ACCESSIBILITY_PREFS, MODE_PRIVATE)
+        val savedVersion = prefs.getInt(KEY_VOICE_PROMPT_VERSION, 0)
+        voicePromptAnswered = prefs.getBoolean(KEY_VOICE_PROMPT_ANSWERED, false) && savedVersion >= CURRENT_VOICE_PROMPT_VERSION
+        voiceAssistantEnabled = if (voicePromptAnswered) prefs.getBoolean(KEY_VOICE_ASSISTANT_ENABLED, false) else false
     }
 
     private fun requestNotificationPermission() {
@@ -149,7 +169,13 @@ class MainActivity : AppCompatActivity() {
     private fun showSplash() {
         val splash = FrameLayout(this).apply {
             setBackgroundColor(getColor(R.color.marketedge_background))
-            val logo = text("MarketEdge", 42f, R.color.marketedge_accent, Typeface.BOLD).apply {
+            val logoMark = ImageView(context).apply {
+                setImageResource(R.drawable.logoiconapp)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                contentDescription = "Logo MarketEdge"
+                alpha = 0f
+            }
+            val logo = text("MarketEdge", 36f, R.color.marketedge_accent, Typeface.BOLD).apply {
                 alpha = 0f
                 gravity = Gravity.CENTER
             }
@@ -160,11 +186,14 @@ class MainActivity : AppCompatActivity() {
             val stack = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
+                addView(logoMark, LinearLayout.LayoutParams(dp(104), dp(104)))
+                addGap(14)
                 addView(logo)
                 addGap(6)
                 addView(subtitle)
             }
             addView(stack, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            logoMark.animate().alpha(1f).translationY(-10f).setDuration(650).start()
             logo.animate().alpha(1f).translationY(-10f).setDuration(700).start()
             subtitle.animate().alpha(1f).translationY(-10f).setDuration(900).setStartDelay(250).start()
         }
@@ -181,6 +210,37 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && handleVoiceVolumeKey(event.keyCode)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (handleVoiceVolumeKey(keyCode)) return true
+        return super.onKeyDown(keyCode, event)
+    }
+
+    private fun handleVoiceVolumeKey(keyCode: Int): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            if (!voicePromptAnswered) {
+                setVoiceAssistantPreference(
+                    enabled = true,
+                    spoken = "Mode akses suara aktif. Mulai sekarang tekan volume atas dari layar mana pun untuk membacakan layar dan memberi perintah."
+                )
+                return true
+            }
+            if (voiceAssistantEnabled) {
+                startVoiceGuideAndCommand()
+                return true
+            }
+        }
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && !voicePromptAnswered) {
+            setVoiceAssistantPreference(enabled = false, spoken = "Baik. Mode akses suara tidak diaktifkan.")
+            return true
+        }
+        return false
+    }
+
     private fun showMain() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -188,6 +248,10 @@ class MainActivity : AppCompatActivity() {
         }
         content = FrameLayout(this).apply {
             setBackgroundColor(getColor(R.color.marketedge_background))
+        }
+        voiceDock = FrameLayout(this).apply {
+            setBackgroundColor(getColor(R.color.marketedge_background))
+            visibility = View.GONE
         }
         bottomNav = BottomNavigationView(this).apply {
             inflateMenu(R.menu.bottom_nav_menu)
@@ -212,10 +276,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
         root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(voiceDock, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)))
         root.addView(bottomNav, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(76)))
         setContentView(root)
         applyInsets(root)
+        refreshVoiceDock()
         bottomNav.selectedItemId = R.id.nav_market
+        if (voicePromptAnswered && !voiceAssistantEnabled) handler.postDelayed({ requestNotificationPermission() }, 650)
+        handler.postDelayed({ maybeShowVoiceOnboardingPrompt() }, 500)
     }
 
     private fun navTint(): ColorStateList = ColorStateList(
@@ -271,28 +339,113 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun display(view: View) {
+        voiceOnboardingOverlay = null
         content.removeAllViews()
         content.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        content.addView(voiceAssistantButton(), FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(42), Gravity.END or Gravity.BOTTOM).apply {
-            rightMargin = dp(14)
-            bottomMargin = if (::bottomNav.isInitialized && bottomNav.visibility == View.GONE) dp(76) else dp(14)
-        })
+        refreshVoiceDock()
+        if (!voicePromptAnswered) handler.postDelayed({ maybeShowVoiceOnboardingPrompt() }, 250)
     }
 
     private fun displayScroll(container: LinearLayout) {
         display(container.tag as View)
     }
 
-    private fun voiceAssistantButton(): TextView = text("Suara", 12f, R.color.white, Typeface.BOLD).apply {
+    private fun refreshVoiceDock() {
+        if (!::voiceDock.isInitialized) return
+        voiceDock.removeAllViews()
+        voiceDock.visibility = if (voiceAssistantEnabled) View.VISIBLE else View.GONE
+        if (!voiceAssistantEnabled) return
+        voiceDock.addView(voiceAssistantButton(), FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(42), Gravity.END or Gravity.CENTER_VERTICAL).apply {
+            rightMargin = dp(16)
+        })
+    }
+
+    private fun voiceAssistantButton(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER
-        contentDescription = "Akses suara. Ketuk untuk membacakan layar dan memberi perintah suara."
-        setPadding(dp(12), 0, dp(12), 0)
-        background = rounded(R.color.marketedge_accent, 20)
-        alpha = 0.96f
+        contentDescription = "Akses suara. Tekan untuk membacakan layar dan memberi perintah suara. Pengguna tunanetra bisa memakai tombol volume atas."
+        setPadding(dp(14), 0, dp(16), 0)
+        background = rounded(R.color.marketedge_accent, 22)
+        elevation = dp(4).toFloat()
+        addView(text("◉", 14f, R.color.white, Typeface.BOLD).apply {
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(7) })
+        addView(text("Suara", 13f, R.color.white, Typeface.BOLD).apply {
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+        })
         setOnClickListener {
             performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
             startVoiceGuideAndCommand()
         }
+    }
+
+    private fun maybeShowVoiceOnboardingPrompt() {
+        if (voicePromptAnswered || voiceOnboardingOverlay != null || !::content.isInitialized) return
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(Color.argb(178, 0, 0, 0))
+            isClickable = true
+            isFocusable = true
+        }
+        val promptCard = card().apply {
+            setPadding(dp(18), dp(18), dp(18), dp(16))
+            addView(text("Apakah kamu penyandang tunanetra?", 22f, R.color.marketedge_text_primary, Typeface.BOLD))
+            addGap(8)
+            addView(text("Gunakan tombol volume fisik agar tidak perlu melihat layar: volume atas untuk Ya, volume bawah untuk Tidak. Jika mikrofon sudah diizinkan, kamu juga bisa menjawab ya atau tidak setelah pertanyaan selesai dibacakan.", 14f, R.color.marketedge_text_secondary))
+            addGap(16)
+            addView(actionButton("Ya, aktifkan suara") {
+                setVoiceAssistantPreference(enabled = true, spoken = "Mode akses suara aktif. Mulai sekarang tekan volume atas dari layar mana pun untuk membacakan layar dan memberi perintah.")
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)))
+            addGap(8)
+            addView(secondaryActionButton("Tidak") {
+                setVoiceAssistantPreference(enabled = false, spoken = "Baik. Mode akses suara tidak diaktifkan.")
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
+        }
+        overlay.addView(promptCard, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply {
+            leftMargin = dp(18)
+            rightMargin = dp(18)
+        })
+        voiceOnboardingOverlay = overlay
+        content.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        announceVoiceOnboardingPrompt()
+    }
+
+    private fun announceVoiceOnboardingPrompt() {
+        if (voiceOnboardingSpoken || voicePromptAnswered || voiceOnboardingOverlay == null) return
+        if (!ttsReady) {
+            handler.postDelayed({ announceVoiceOnboardingPrompt() }, 350)
+            return
+        }
+        voiceOnboardingSpoken = true
+        val canListenNow = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val prompt = if (canListenNow) {
+            "Apakah kamu penyandang tunanetra? Setelah suara berhenti, jawab ya atau tidak. Kamu juga bisa tekan volume atas untuk Ya atau volume bawah untuk Tidak."
+        } else {
+            "Apakah kamu penyandang tunanetra? Tekan volume atas untuk Ya. Tekan volume bawah untuk Tidak. Kalau memilih Ya, dari layar mana pun tekan volume atas untuk membacakan layar dan memberi perintah."
+        }
+        speakVoice(
+            prompt,
+            listenAfter = canListenNow,
+            listenAfterMode = VoiceCaptureMode.ONBOARDING,
+            listenAfterPrompt = "Jawab ya atau tidak."
+        )
+    }
+
+    private fun setVoiceAssistantPreference(enabled: Boolean, spoken: String) {
+        voicePromptAnswered = true
+        voiceAssistantEnabled = enabled
+        getSharedPreferences(ACCESSIBILITY_PREFS, MODE_PRIVATE).edit()
+            .putBoolean(KEY_VOICE_PROMPT_ANSWERED, true)
+            .putBoolean(KEY_VOICE_ASSISTANT_ENABLED, enabled)
+            .putInt(KEY_VOICE_PROMPT_VERSION, CURRENT_VOICE_PROMPT_VERSION)
+            .apply()
+        voiceOnboardingOverlay?.let { overlay ->
+            (overlay.parent as? ViewGroup)?.removeView(overlay)
+        }
+        voiceOnboardingOverlay = null
+        refreshVoiceDock()
+        speakVoice(spoken)
+        if (!enabled) handler.postDelayed({ requestNotificationPermission() }, 650)
     }
 
     private fun setupVoiceAccessibility() {
@@ -315,14 +468,14 @@ class MainActivity : AppCompatActivity() {
             override fun onDone(utteranceId: String?) {
                 if (utteranceId != null && utteranceId == listenAfterUtteranceId) {
                     listenAfterUtteranceId = null
-                    handler.post { startVoiceCommandListening() }
+                    handler.post { startListeningAfterVoice() }
                 }
             }
 
             override fun onError(utteranceId: String?) {
                 if (utteranceId != null && utteranceId == listenAfterUtteranceId) {
                     listenAfterUtteranceId = null
-                    handler.post { startVoiceCommandListening() }
+                    handler.post { startListeningAfterVoice() }
                 }
             }
         })
@@ -333,7 +486,12 @@ class MainActivity : AppCompatActivity() {
         speakVoice(guide, listenAfter = true)
     }
 
-    private fun speakVoice(message: String, listenAfter: Boolean = false) {
+    private fun speakVoice(
+        message: String,
+        listenAfter: Boolean = false,
+        listenAfterMode: VoiceCaptureMode = VoiceCaptureMode.COMMAND,
+        listenAfterPrompt: String = ""
+    ) {
         val clean = message
             .replace("\n", ". ")
             .replace(Regex("\\s+"), " ")
@@ -342,18 +500,34 @@ class MainActivity : AppCompatActivity() {
         val engine = textToSpeech
         val utteranceId = "voice-${System.currentTimeMillis()}"
         listenAfterUtteranceId = if (listenAfter) utteranceId else null
+        this.listenAfterMode = if (listenAfter) listenAfterMode else null
+        this.listenAfterPrompt = if (listenAfter) listenAfterPrompt.ifBlank { promptForVoiceMode(listenAfterMode) } else ""
         if (!ttsReady || engine == null) {
-            if (listenAfter) handler.postDelayed({ startVoiceCommandListening() }, 600)
+            if (listenAfter) handler.postDelayed({ startListeningAfterVoice() }, 600)
             return
         }
         engine.stop()
         engine.speak(clean, TextToSpeech.QUEUE_FLUSH, Bundle(), utteranceId)
     }
 
+    private fun startListeningAfterVoice() {
+        val mode = listenAfterMode ?: VoiceCaptureMode.COMMAND
+        val prompt = listenAfterPrompt.ifBlank { promptForVoiceMode(mode) }
+        listenAfterMode = null
+        listenAfterPrompt = ""
+        startSpeechRecognition(mode = mode, prompt = prompt)
+    }
+
+    private fun promptForVoiceMode(mode: VoiceCaptureMode): String = when (mode) {
+        VoiceCaptureMode.ONBOARDING -> "Jawab ya atau tidak."
+        VoiceCaptureMode.AI_QUESTION -> "Ucapkan pertanyaan untuk WarrenAI."
+        VoiceCaptureMode.COMMAND -> "Sebutkan tujuan, misalnya buka berita, buka AI, atau berita pertama."
+    }
+
     private fun startVoiceCommandListening() {
         startSpeechRecognition(
             mode = VoiceCaptureMode.COMMAND,
-            prompt = "Sebutkan tujuan, misalnya buka berita, buka AI, atau berita pertama."
+            prompt = promptForVoiceMode(VoiceCaptureMode.COMMAND)
         )
     }
 
@@ -438,8 +612,9 @@ class MainActivity : AppCompatActivity() {
     private fun handleVoiceRecognitionError(error: Int) {
         if (error == SpeechRecognizer.ERROR_CLIENT || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) return
         val message = when (voiceCaptureMode) {
-            VoiceCaptureMode.AI_QUESTION -> "Saya belum menangkap pertanyaan. Ketuk mikrofon AI lalu ucapkan lagi."
-            VoiceCaptureMode.COMMAND -> "Saya belum menangkap perintah. Ketuk tombol Suara lalu coba lagi."
+            VoiceCaptureMode.ONBOARDING -> "Saya belum menangkap jawaban. Tekan volume atas untuk Ya atau volume bawah untuk Tidak."
+            VoiceCaptureMode.AI_QUESTION -> "Saya belum menangkap pertanyaan. Tekan volume atas lalu ucapkan, tanya AI tentang, diikuti pertanyaanmu."
+            VoiceCaptureMode.COMMAND -> "Saya belum menangkap perintah. Tekan volume atas lalu coba lagi."
         }
         speakVoice(message)
     }
@@ -451,8 +626,20 @@ class MainActivity : AppCompatActivity() {
             return
         }
         when (voiceCaptureMode) {
+            VoiceCaptureMode.ONBOARDING -> handleVoiceOnboardingAnswer(value)
             VoiceCaptureMode.AI_QUESTION -> sendRealAiQuestion(value)
             VoiceCaptureMode.COMMAND -> handleVoiceCommand(value)
+        }
+    }
+
+    private fun handleVoiceOnboardingAnswer(spoken: String) {
+        val command = normalizeVoiceCommand(spoken)
+        when {
+            commandContains(command, "tidak", "nggak", "enggak", "ga", "gak", "jangan") ->
+                setVoiceAssistantPreference(enabled = false, spoken = "Baik. Mode akses suara tidak diaktifkan.")
+            commandContains(command, "ya", "iya", "yap", "boleh", "aktifkan", "tunanetra", "buta") ->
+                setVoiceAssistantPreference(enabled = true, spoken = "Mode akses suara aktif. Mulai sekarang tekan volume atas dari layar mana pun untuk membacakan layar dan memberi perintah.")
+            else -> speakVoice("Saya belum paham jawaban itu. Silakan jawab ya atau tidak.")
         }
     }
 
@@ -520,7 +707,7 @@ class MainActivity : AppCompatActivity() {
             speakVoice("WarrenAI membutuhkan akun Pro High. Silakan masuk atau aktifkan langganan.")
             return
         }
-        speakVoice("Membuka WarrenAI. Anda bisa mengetuk mikrofon untuk bertanya dengan suara.")
+        speakVoice("Membuka WarrenAI. Tekan volume atas lalu ucapkan tanya AI tentang, diikuti pertanyaanmu.")
         renderAiChat()
     }
 
@@ -563,7 +750,7 @@ class MainActivity : AppCompatActivity() {
     private fun currentVoiceGuide(): String {
         if (!::bottomNav.isInitialized) return "MarketEdge sedang dibuka."
         if (activeAiSurface == AiSurface.FULLSCREEN) {
-            return "Anda berada di WarrenAI. Ketuk mikrofon untuk mengirim pertanyaan suara, atau ucapkan kembali untuk keluar."
+            return "Anda berada di WarrenAI. Tekan volume atas lalu ucapkan tanya AI tentang, diikuti pertanyaanmu. Ucapkan kembali untuk keluar."
         }
         val activeArticle = activeArticleId?.let { id -> newsArticles.firstOrNull { it.id == id } }
         if (activeArticle != null) {
@@ -688,7 +875,11 @@ class MainActivity : AppCompatActivity() {
             if (granted && mode != null) {
                 startSpeechRecognition(
                     mode = mode,
-                    prompt = if (mode == VoiceCaptureMode.AI_QUESTION) "Ucapkan pertanyaan untuk WarrenAI." else "Sebutkan perintah."
+                    prompt = when (mode) {
+                        VoiceCaptureMode.ONBOARDING -> "Jawab ya atau tidak."
+                        VoiceCaptureMode.AI_QUESTION -> "Ucapkan pertanyaan untuk WarrenAI."
+                        VoiceCaptureMode.COMMAND -> "Sebutkan perintah."
+                    }
                 )
             } else if (!granted) {
                 speakVoice("Izin mikrofon belum diberikan. Akses suara belum bisa mendengarkan perintah.")
@@ -733,7 +924,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         screen.addGap(6)
-        screen.addView(infoCard("Ketuk instrumen untuk melihat detail harga, grafik, dan statistik pasar."))
+        screen.addView(infoCard("Pilih instrumen untuk melihat detail harga, grafik, dan statistik pasar."))
         displayScroll(screen)
     }
 
@@ -3379,6 +3570,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private enum class VoiceCaptureMode {
+        ONBOARDING,
         COMMAND,
         AI_QUESTION
     }

@@ -15,6 +15,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Space
@@ -122,6 +123,15 @@ fun Context.topBar(title: String, showLogo: Boolean = false, onSearch: (() -> Un
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(0, 0, 0, dp(10))
+        if (showLogo) {
+            addView(ImageView(context).apply {
+                setImageResource(R.drawable.logoiconapp)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                contentDescription = "Logo MarketEdge"
+            }, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
+                marginEnd = dp(10)
+            })
+        }
         val titleView = text(title, if (showLogo) 24f else 22f, R.color.marketedge_text_primary, Typeface.BOLD).apply {
             if (showLogo) setTextColor(getColor(R.color.marketedge_accent))
         }
