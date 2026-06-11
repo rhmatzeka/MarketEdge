@@ -77,6 +77,7 @@ private const val ACCESSIBILITY_PREFS = "marketedge_accessibility"
 private const val KEY_VOICE_PROMPT_ANSWERED = "voice_prompt_answered"
 private const val KEY_VOICE_ASSISTANT_ENABLED = "voice_assistant_enabled"
 private const val KEY_VOICE_PROMPT_VERSION = "voice_prompt_version"
+private const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
 private const val CURRENT_VOICE_PROMPT_VERSION = 4
 
 class MainActivity : AppCompatActivity() {
@@ -158,12 +159,31 @@ class MainActivity : AppCompatActivity() {
         voiceAssistantEnabled = if (voicePromptAnswered) prefs.getBoolean(KEY_VOICE_ASSISTANT_ENABLED, false) else false
     }
 
-    private fun requestNotificationPermission() {
+    private fun shouldRequestNotificationPermission(force: Boolean = false): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return false
+        if (force) return true
+        return !getSharedPreferences(ACCESSIBILITY_PREFS, MODE_PRIVATE)
+            .getBoolean(KEY_NOTIFICATION_PERMISSION_REQUESTED, false)
+    }
+
+    private fun requestNotificationPermission(force: Boolean = false) {
+        if (!shouldRequestNotificationPermission(force)) return
+        getSharedPreferences(ACCESSIBILITY_PREFS, MODE_PRIVATE).edit()
+            .putBoolean(KEY_NOTIFICATION_PERMISSION_REQUESTED, true)
+            .apply()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
         }
+    }
+
+    private fun requestNotificationPermissionAfterVoicePrompt(spokenMessage: String) {
+        if (!shouldRequestNotificationPermission()) return
+        val wordCount = spokenMessage.split(Regex("\\s+")).count { it.isNotBlank() }
+        val delayMs = (wordCount * 430L).coerceIn(3200L, 8500L)
+        handler.postDelayed({ requestNotificationPermission() }, delayMs)
     }
 
     private fun showSplash() {
@@ -444,8 +464,13 @@ class MainActivity : AppCompatActivity() {
         }
         voiceOnboardingOverlay = null
         refreshVoiceDock()
-        speakVoice(spoken)
-        if (!enabled) handler.postDelayed({ requestNotificationPermission() }, 650)
+        val finalSpoken = if (enabled && shouldRequestNotificationPermission()) {
+            "$spoken Agar MarketEdge bisa memberi kabar saat ada berita terbaru, Android akan meminta izin notifikasi setelah penjelasan ini selesai."
+        } else {
+            spoken
+        }
+        speakVoice(finalSpoken)
+        if (enabled) requestNotificationPermissionAfterVoicePrompt(finalSpoken) else handler.postDelayed({ requestNotificationPermission() }, 650)
     }
 
     private fun setupVoiceAccessibility() {
@@ -661,6 +686,14 @@ class MainActivity : AppCompatActivity() {
                 if (isLoggedIn()) renderSubscription(AuthEntry.MORE) else renderAuth(AuthEntry.MORE)
                 speakVoice("Membuka akses langganan.")
             }
+            commandContains(command, "notifikasi", "notif") -> {
+                if (shouldRequestNotificationPermission(force = true)) {
+                    speakVoice("Saya membuka permintaan izin notifikasi berita terbaru dari Android.")
+                    handler.postDelayed({ requestNotificationPermission(force = true) }, 2200)
+                } else {
+                    speakVoice("Notifikasi berita terbaru sudah siap digunakan.")
+                }
+            }
             command.contains("berita") && newsNumber != null -> openNewsByVoiceNumber(newsNumber)
             command.contains("berita") && command.contains("tentang") ->
                 openNewsByVoiceQuery(command.substringAfter("tentang"))
@@ -868,6 +901,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == NOTIFICATION_PERMISSION_REQUEST) {
+            val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            if (voiceAssistantEnabled) {
+                speakVoice(if (granted) "Notifikasi berita terbaru aktif." else "Izin notifikasi belum diberikan. MarketEdge belum bisa menampilkan notifikasi berita terbaru.")
+            } else {
+                Toast.makeText(this, if (granted) "Notifikasi berita terbaru aktif" else "Izin notifikasi belum diberikan", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
         if (requestCode == AUDIO_PERMISSION_REQUEST) {
             val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
             val mode = pendingPermissionMode
@@ -3311,7 +3353,10 @@ class MainActivity : AppCompatActivity() {
         executor.execute {
             val result = runCatching { repository.topNews() }
             runOnUiThread {
-                result.onSuccess { newsArticles = it }
+                result.onSuccess {
+                    newsArticles = it
+                    NewsNotificationController.recordLatestFromArticles(this, it)
+                }
                     .onFailure { newsError = it.message ?: it.javaClass.simpleName }
                 newsLoading = false
                 done()

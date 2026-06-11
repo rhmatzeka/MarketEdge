@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:name=".MarketEdgeApplication"
@@ -16,6 +17,15 @@
         android:roundIcon="@drawable/logoiconapp"
         android:supportsRtl="true"
         android:theme="@style/Theme.MarketEdge">
+        <receiver
+            android:name=".NewsNotificationReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="id.rahmat.marketedge.action.CHECK_NEWS" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
