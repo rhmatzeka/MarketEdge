@@ -12,6 +12,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.text.Editable
 import android.text.Html
 import android.text.TextUtils
@@ -27,6 +32,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Space
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
@@ -63,6 +69,9 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import org.json.JSONArray
 import org.json.JSONObject
+
+private const val NOTIFICATION_PERMISSION_REQUEST = 10
+private const val AUDIO_PERMISSION_REQUEST = 20
 
 class MainActivity : AppCompatActivity() {
     private val apiClient = PublicApiClient()
@@ -110,6 +119,13 @@ class MainActivity : AppCompatActivity() {
     private var currentArticleBackAction: (() -> Unit)? = null
     private lateinit var content: FrameLayout
     private lateinit var bottomNav: BottomNavigationView
+    private var textToSpeech: TextToSpeech? = null
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var ttsReady = false
+    private var voiceListening = false
+    private var listenAfterUtteranceId: String? = null
+    private var pendingPermissionMode: VoiceCaptureMode? = null
+    private var voiceCaptureMode = VoiceCaptureMode.COMMAND
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -117,6 +133,7 @@ class MainActivity : AppCompatActivity() {
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = getColor(R.color.marketedge_surface)
         setupHardwareBack()
+        setupVoiceAccessibility()
         requestNotificationPermission()
         showSplash()
     }
@@ -125,7 +142,7 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
         }
     }
 
@@ -158,6 +175,9 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         executor.shutdownNow()
         imageExecutor.shutdownNow()
+        speechRecognizer?.destroy()
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
         super.onDestroy()
     }
 
@@ -253,10 +273,427 @@ class MainActivity : AppCompatActivity() {
     private fun display(view: View) {
         content.removeAllViews()
         content.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        content.addView(voiceAssistantButton(), FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(42), Gravity.END or Gravity.BOTTOM).apply {
+            rightMargin = dp(14)
+            bottomMargin = if (::bottomNav.isInitialized && bottomNav.visibility == View.GONE) dp(76) else dp(14)
+        })
     }
 
     private fun displayScroll(container: LinearLayout) {
         display(container.tag as View)
+    }
+
+    private fun voiceAssistantButton(): TextView = text("Suara", 12f, R.color.white, Typeface.BOLD).apply {
+        gravity = Gravity.CENTER
+        contentDescription = "Akses suara. Ketuk untuk membacakan layar dan memberi perintah suara."
+        setPadding(dp(12), 0, dp(12), 0)
+        background = rounded(R.color.marketedge_accent, 20)
+        alpha = 0.96f
+        setOnClickListener {
+            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            startVoiceGuideAndCommand()
+        }
+    }
+
+    private fun setupVoiceAccessibility() {
+        textToSpeech = TextToSpeech(this) { status ->
+            handler.post {
+                val engine = textToSpeech ?: return@post
+                if (status == TextToSpeech.SUCCESS) {
+                    val languageResult = engine.setLanguage(Locale("id", "ID"))
+                    if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                        engine.language = Locale.US
+                    }
+                    engine.setSpeechRate(0.94f)
+                    ttsReady = true
+                }
+            }
+        }
+        textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) = Unit
+
+            override fun onDone(utteranceId: String?) {
+                if (utteranceId != null && utteranceId == listenAfterUtteranceId) {
+                    listenAfterUtteranceId = null
+                    handler.post { startVoiceCommandListening() }
+                }
+            }
+
+            override fun onError(utteranceId: String?) {
+                if (utteranceId != null && utteranceId == listenAfterUtteranceId) {
+                    listenAfterUtteranceId = null
+                    handler.post { startVoiceCommandListening() }
+                }
+            }
+        })
+    }
+
+    private fun startVoiceGuideAndCommand() {
+        val guide = currentVoiceGuide() + " Setelah suara berhenti, sebutkan perintah."
+        speakVoice(guide, listenAfter = true)
+    }
+
+    private fun speakVoice(message: String, listenAfter: Boolean = false) {
+        val clean = message
+            .replace("\n", ". ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (clean.isBlank()) return
+        val engine = textToSpeech
+        val utteranceId = "voice-${System.currentTimeMillis()}"
+        listenAfterUtteranceId = if (listenAfter) utteranceId else null
+        if (!ttsReady || engine == null) {
+            if (listenAfter) handler.postDelayed({ startVoiceCommandListening() }, 600)
+            return
+        }
+        engine.stop()
+        engine.speak(clean, TextToSpeech.QUEUE_FLUSH, Bundle(), utteranceId)
+    }
+
+    private fun startVoiceCommandListening() {
+        startSpeechRecognition(
+            mode = VoiceCaptureMode.COMMAND,
+            prompt = "Sebutkan tujuan, misalnya buka berita, buka AI, atau berita pertama."
+        )
+    }
+
+    private fun startAiVoiceQuestion() {
+        if (!hasAiAccess()) {
+            speakVoice("WarrenAI membutuhkan akun Pro High. Saya membuka halaman akses AI.")
+            if (isLoggedIn()) renderSubscription(AuthEntry.AI) else renderAuth(AuthEntry.AI)
+            return
+        }
+        speakVoice("Saya mendengarkan pertanyaan untuk WarrenAI.")
+        handler.postDelayed({
+            startSpeechRecognition(
+                mode = VoiceCaptureMode.AI_QUESTION,
+                prompt = "Ucapkan pertanyaan untuk WarrenAI."
+            )
+        }, 700)
+    }
+
+    private fun startSpeechRecognition(mode: VoiceCaptureMode, prompt: String) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            pendingPermissionMode = mode
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), AUDIO_PERMISSION_REQUEST)
+            speakVoice("Izin mikrofon dibutuhkan agar akses suara bisa digunakan.")
+            return
+        }
+        val recognizer = ensureSpeechRecognizer() ?: run {
+            speakVoice("Pengenalan suara belum tersedia di perangkat ini.")
+            return
+        }
+        voiceCaptureMode = mode
+        voiceListening = true
+        Toast.makeText(this, prompt, Toast.LENGTH_SHORT).show()
+        runCatching { recognizer.cancel() }
+        recognizer.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "id-ID")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "id-ID")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+        })
+    }
+
+    private fun ensureSpeechRecognizer(): SpeechRecognizer? {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) return null
+        if (speechRecognizer == null) {
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+                setRecognitionListener(object : RecognitionListener {
+                    override fun onReadyForSpeech(params: Bundle?) {
+                        voiceListening = true
+                    }
+
+                    override fun onBeginningOfSpeech() = Unit
+                    override fun onRmsChanged(rmsdB: Float) = Unit
+                    override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+                    override fun onEndOfSpeech() {
+                        voiceListening = false
+                    }
+
+                    override fun onError(error: Int) {
+                        voiceListening = false
+                        handleVoiceRecognitionError(error)
+                    }
+
+                    override fun onResults(results: Bundle?) {
+                        voiceListening = false
+                        val spoken = results
+                            ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                            ?.firstOrNull()
+                            .orEmpty()
+                        handleVoiceSpeech(spoken)
+                    }
+
+                    override fun onPartialResults(partialResults: Bundle?) = Unit
+                    override fun onEvent(eventType: Int, params: Bundle?) = Unit
+                })
+            }
+        }
+        return speechRecognizer
+    }
+
+    private fun handleVoiceRecognitionError(error: Int) {
+        if (error == SpeechRecognizer.ERROR_CLIENT || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) return
+        val message = when (voiceCaptureMode) {
+            VoiceCaptureMode.AI_QUESTION -> "Saya belum menangkap pertanyaan. Ketuk mikrofon AI lalu ucapkan lagi."
+            VoiceCaptureMode.COMMAND -> "Saya belum menangkap perintah. Ketuk tombol Suara lalu coba lagi."
+        }
+        speakVoice(message)
+    }
+
+    private fun handleVoiceSpeech(spoken: String) {
+        val value = spoken.trim()
+        if (value.isBlank()) {
+            speakVoice("Saya belum menangkap suara dengan jelas.")
+            return
+        }
+        when (voiceCaptureMode) {
+            VoiceCaptureMode.AI_QUESTION -> sendRealAiQuestion(value)
+            VoiceCaptureMode.COMMAND -> handleVoiceCommand(value)
+        }
+    }
+
+    private fun handleVoiceCommand(spoken: String) {
+        val command = normalizeVoiceCommand(spoken)
+        val newsNumber = extractVoiceNumber(command)
+        when {
+            commandContains(command, "baca", "bacakan", "ulang", "panduan", "menu apa") ->
+                speakVoice(currentVoiceGuide())
+            commandContains(command, "kembali", "mundur") -> {
+                speakVoice("Kembali.")
+                handleHardwareBack()
+            }
+            commandContains(command, "masuk", "login", "daftar") -> {
+                renderAuth(AuthEntry.MORE)
+                speakVoice("Membuka halaman masuk dan daftar.")
+            }
+            commandContains(command, "upgrade", "langganan", "pro high", "pro") -> {
+                if (isLoggedIn()) renderSubscription(AuthEntry.MORE) else renderAuth(AuthEntry.MORE)
+                speakVoice("Membuka akses langganan.")
+            }
+            command.contains("berita") && newsNumber != null -> openNewsByVoiceNumber(newsNumber)
+            command.contains("berita") && command.contains("tentang") ->
+                openNewsByVoiceQuery(command.substringAfter("tentang"))
+            commandContains(command, "buka ai", "buka warren", "buka warrenai", "warren ai", "warrenai") ->
+                openAiByVoice()
+            commandContains(command, "tanya ai", "kirim ai", "tanyakan ai", "bertanya ai") -> {
+                val question = aiQuestionFromSpeech(spoken)
+                if (question.isBlank()) startAiVoiceQuestion() else sendVoiceQuestionToAi(question)
+            }
+            commandContains(command, "buka pasar", "market", "pasar") -> openTopLevelByVoice(R.id.nav_market, "Membuka pasar.")
+            commandContains(command, "buka berita", "news", "berita") -> openTopLevelByVoice(R.id.nav_news, "Membuka berita.")
+            commandContains(command, "buka watchlist", "watchlist", "daftar pantau") -> openTopLevelByVoice(R.id.nav_watchlist, "Membuka watchlist.")
+            commandContains(command, "buka lainnya", "lainnya", "profil", "menu") -> openTopLevelByVoice(R.id.nav_more, "Membuka menu lainnya.")
+            commandContains(command, "kalender") -> renderQuickDetail("Kalender").also { speakVoice("Membuka kalender.") }
+            commandContains(command, "broker") -> renderQuickDetail("Temukan Broker Terbaik").also { speakVoice("Membuka pencarian broker terbaik.") }
+            commandContains(command, "undervalued", "saham murah") -> renderQuickDetail("Saham Undervalued").also { speakVoice("Membuka saham undervalued.") }
+            else -> speakVoice("Saya belum paham perintah itu. Contoh perintah: buka berita, berita pertama, buka AI, tanya AI tentang Bitcoin, buka watchlist, atau kembali.")
+        }
+    }
+
+    private fun sendVoiceQuestionToAi(question: String) {
+        if (!hasAiAccess()) {
+            speakVoice("WarrenAI membutuhkan akun Pro High. Saya membuka halaman akses AI.")
+            if (isLoggedIn()) renderSubscription(AuthEntry.AI) else renderAuth(AuthEntry.AI)
+            return
+        }
+        activeAiSurface = AiSurface.PAGE
+        pendingIdeasChatScroll = true
+        if (::bottomNav.isInitialized) bottomNav.selectedItemId = R.id.nav_ideas
+        sendRealAiQuestion(question)
+    }
+
+    private fun openTopLevelByVoice(itemId: Int, message: String) {
+        speakVoice(message)
+        if (::bottomNav.isInitialized) {
+            bottomNav.selectedItemId = itemId
+        }
+        handler.postDelayed({ speakVoice(currentVoiceGuide()) }, 550)
+    }
+
+    private fun openAiByVoice() {
+        if (!hasAiAccess()) {
+            renderAiChat()
+            speakVoice("WarrenAI membutuhkan akun Pro High. Silakan masuk atau aktifkan langganan.")
+            return
+        }
+        speakVoice("Membuka WarrenAI. Anda bisa mengetuk mikrofon untuk bertanya dengan suara.")
+        renderAiChat()
+    }
+
+    private fun openNewsByVoiceNumber(number: Int) {
+        if (!hasNewsAccess()) {
+            renderNews()
+            speakVoice("Berita terbaru membutuhkan akun Pro atau Pro High.")
+            return
+        }
+        val articles = visibleNewsForVoice()
+        val article = articles.getOrNull(number - 1)
+        if (article == null) {
+            speakVoice("Berita nomor $number belum tersedia di daftar ini.")
+            return
+        }
+        speakVoice("Membuka berita nomor $number: ${shortSpeech(article.title, 90)}.")
+        openNewsDetail(article)
+    }
+
+    private fun openNewsByVoiceQuery(query: String) {
+        if (!hasNewsAccess()) {
+            renderNews()
+            speakVoice("Berita terbaru membutuhkan akun Pro atau Pro High.")
+            return
+        }
+        val normalizedQuery = normalizeVoiceCommand(query)
+        val article = visibleNewsForVoice().firstOrNull {
+            normalizeVoiceCommand(it.title).contains(normalizedQuery)
+        }
+        if (article == null) {
+            speakVoice("Saya belum menemukan berita tentang $query di daftar saat ini.")
+            return
+        }
+        speakVoice("Membuka berita: ${shortSpeech(article.title, 90)}.")
+        openNewsDetail(article)
+    }
+
+    private fun visibleNewsForVoice(): List<NewsArticle> = if (newsArticles.isEmpty()) emptyList() else filteredNewsArticles()
+
+    private fun currentVoiceGuide(): String {
+        if (!::bottomNav.isInitialized) return "MarketEdge sedang dibuka."
+        if (activeAiSurface == AiSurface.FULLSCREEN) {
+            return "Anda berada di WarrenAI. Ketuk mikrofon untuk mengirim pertanyaan suara, atau ucapkan kembali untuk keluar."
+        }
+        val activeArticle = activeArticleId?.let { id -> newsArticles.firstOrNull { it.id == id } }
+        if (activeArticle != null) {
+            return "Detail berita. Judul: ${shortSpeech(activeArticle.title, 140)}. Ucapkan tanya AI tentang berita ini, buka sumber, atau kembali."
+        }
+        return when (currentTopLevelNavId) {
+            R.id.nav_market -> marketVoiceGuide()
+            R.id.nav_news -> newsVoiceGuide()
+            R.id.nav_ideas -> ideasVoiceGuide()
+            R.id.nav_watchlist -> watchlistVoiceGuide()
+            R.id.nav_more -> moreVoiceGuide()
+            else -> "MarketEdge. Ucapkan buka pasar, buka berita, buka AI, buka watchlist, atau buka lainnya."
+        }
+    }
+
+    private fun marketVoiceGuide(): String {
+        val assets = filteredMarketAssets().take(5)
+        if (marketLoading || marketAssets.isEmpty()) {
+            return "Layar Pasar. Data market sedang dimuat. Ucapkan buka berita, buka AI, buka watchlist, atau buka lainnya."
+        }
+        val summary = assets.mapIndexed { index, asset ->
+            "${index + 1}. ${asset.symbol}, ${asset.price}, ${formatPercent(asset.changePercent)}"
+        }.joinToString(". ")
+        return "Layar Pasar, filter ${selectedMarketTitle()}. Aset teratas: $summary. Ucapkan buka berita, buka AI, buka watchlist, atau buka lainnya."
+    }
+
+    private fun newsVoiceGuide(): String {
+        if (!hasNewsAccess()) {
+            return "Layar Berita. Berita terbaru terkunci untuk akun Pro atau Pro High. Ucapkan masuk, daftar, atau upgrade."
+        }
+        val articles = visibleNewsForVoice().take(5)
+        if (newsLoading || articles.isEmpty()) {
+            return "Layar Berita. Headline sedang dimuat. Setelah muncul, ucapkan berita pertama, berita kedua, atau berita ketiga."
+        }
+        val summary = articles.mapIndexed { index, article ->
+            "Berita ${index + 1}: ${shortSpeech(article.title, 95)}"
+        }.joinToString(". ")
+        return "Layar Berita, kategori $selectedNewsCategory. $summary. Ucapkan berita pertama untuk membuka, atau tanya AI tentang berita."
+    }
+
+    private fun ideasVoiceGuide(): String {
+        if (!hasAiAccess()) {
+            return "Layar AI. WarrenAI membutuhkan Pro High. Ucapkan masuk, daftar, atau upgrade untuk mengaktifkan."
+        }
+        val strongest = marketAssets.maxByOrNull { it.changePercent }
+        val latest = newsArticles.firstOrNull()
+        return buildString {
+            append("Layar AI. ")
+            strongest?.let { append("Aset terkuat saat ini ${it.symbol} ${formatPercent(it.changePercent)}. ") }
+            latest?.let { append("Headline terbaru: ${shortSpeech(it.title, 110)}. ") }
+            append("Ucapkan buka AI untuk chat penuh, atau tanya AI tentang topik tertentu.")
+        }
+    }
+
+    private fun watchlistVoiceGuide(): String {
+        val assets = watchlistAssets().take(5)
+        if (assets.isEmpty()) {
+            return "Layar Watchlist. Watchlist masih kosong. Ucapkan buka pasar untuk memilih aset."
+        }
+        val summary = assets.joinToString(". ") { "${it.symbol}, ${it.price}, ${formatPercent(it.changePercent)}" }
+        return "Layar Watchlist. Aset tersimpan: $summary. Ucapkan buka pasar, buka berita, atau buka AI."
+    }
+
+    private fun moreVoiceGuide(): String =
+        "Layar Lainnya. Ada profil, rekomendasi upgrade, akses cepat Kalender, WarrenAI, Temukan Broker Terbaik, dan Saham Undervalued. Ada juga monitor Peringatan, Item Tersimpan, Sentimen Saya, dan Versi Bebas Iklan. Ucapkan buka AI, kalender, broker, saham undervalued, upgrade, atau kembali."
+
+    private fun normalizeVoiceCommand(value: String): String = value
+        .lowercase(Locale("id", "ID"))
+        .replace(Regex("[^a-z0-9\\s]"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
+    private fun commandContains(command: String, vararg keywords: String): Boolean =
+        keywords.any { command.contains(it) }
+
+    private fun extractVoiceNumber(command: String): Int? {
+        Regex("\\b([0-9]{1,2})\\b").find(command)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
+        val words = mapOf(
+            "satu" to 1,
+            "pertama" to 1,
+            "dua" to 2,
+            "kedua" to 2,
+            "tiga" to 3,
+            "ketiga" to 3,
+            "empat" to 4,
+            "keempat" to 4,
+            "lima" to 5,
+            "kelima" to 5,
+            "enam" to 6,
+            "keenam" to 6,
+            "tujuh" to 7,
+            "ketujuh" to 7,
+            "delapan" to 8,
+            "kedelapan" to 8,
+            "sembilan" to 9,
+            "kesembilan" to 9,
+            "sepuluh" to 10,
+            "kesepuluh" to 10
+        )
+        return words.firstNotNullOfOrNull { (word, number) -> number.takeIf { Regex("\\b$word\\b").containsMatchIn(command) } }
+    }
+
+    private fun aiQuestionFromSpeech(spoken: String): String {
+        val lower = spoken.lowercase(Locale("id", "ID"))
+        val prefixes = listOf("tanyakan ai", "tanya ai", "kirim ai", "bertanya ai")
+        val prefix = prefixes.firstOrNull { lower.contains(it) } ?: return ""
+        val start = lower.indexOf(prefix) + prefix.length
+        return spoken.drop(start).trim().removePrefix("tentang").trim()
+    }
+
+    private fun shortSpeech(value: String, maxLength: Int): String =
+        value.replace(Regex("\\s+"), " ").trim().let { clean ->
+            if (clean.length <= maxLength) clean else clean.take(maxLength).substringBeforeLast(" ").ifBlank { clean.take(maxLength) }
+        }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == AUDIO_PERMISSION_REQUEST) {
+            val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            val mode = pendingPermissionMode
+            pendingPermissionMode = null
+            if (granted && mode != null) {
+                startSpeechRecognition(
+                    mode = mode,
+                    prompt = if (mode == VoiceCaptureMode.AI_QUESTION) "Ucapkan pertanyaan untuk WarrenAI." else "Sebutkan perintah."
+                )
+            } else if (!granted) {
+                speakVoice("Izin mikrofon belum diberikan. Akses suara belum bisa mendengarkan perintah.")
+            }
+        }
     }
 
     private fun renderMarket() {
@@ -360,6 +797,7 @@ class MainActivity : AppCompatActivity() {
             minimumHeight = dp(54)
             setPadding(dp(12), dp(7), dp(10), dp(7))
             background = rounded(R.color.marketedge_surface, 0)
+            contentDescription = "${asset.name}, harga ${asset.price}, perubahan ${formatPercent(asset.changePercent)}"
             setOnClickListener {
                 performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 openMarketDetail(asset)
@@ -921,6 +1359,7 @@ class MainActivity : AppCompatActivity() {
     private fun featuredNews(article: NewsArticle): View =
         FrameLayout(this).apply {
             addView(card().apply {
+                contentDescription = "Berita utama. ${article.title}. ${article.source}, ${article.timeAgo}"
                 addView(articleImage(article, 172))
                 addGap(12)
                 addView(text(article.title, 20f, R.color.marketedge_text_primary, Typeface.BOLD).apply {
@@ -948,6 +1387,7 @@ class MainActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(12), dp(12), dp(42), dp(12))
                 background = rounded(R.color.marketedge_card, 8, R.color.marketedge_hairline)
+                contentDescription = "Berita. ${article.title}. ${article.source}, ${article.timeAgo}"
                 setOnClickListener { openNewsDetail(article) }
             }
             row.addView(articleImage(article, 84, compact = true), LinearLayout.LayoutParams(dp(92), dp(84)).apply { marginEnd = dp(12) })
@@ -1231,6 +1671,7 @@ class MainActivity : AppCompatActivity() {
     private fun actionButton(label: String, onClick: (View) -> Unit): TextView =
         text(label, 14f, R.color.white, Typeface.BOLD).apply {
             gravity = Gravity.CENTER
+            contentDescription = label
             background = rounded(R.color.marketedge_accent, 8)
             setOnClickListener(onClick)
         }
@@ -1238,6 +1679,7 @@ class MainActivity : AppCompatActivity() {
     private fun secondaryActionButton(label: String, onClick: (View) -> Unit): TextView =
         text(label, 13f, R.color.marketedge_text_primary, Typeface.BOLD).apply {
             gravity = Gravity.CENTER
+            contentDescription = label
             background = rounded(R.color.marketedge_card_soft, 8, R.color.marketedge_hairline)
             setOnClickListener(onClick)
         }
@@ -1499,10 +1941,16 @@ class MainActivity : AppCompatActivity() {
         }
         val input = editText("Tanya dampak berita atau aset...")
         inputRow.addView(input, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
+        inputRow.addView(iconButton("Pertanyaan suara ke WarrenAI", "◉").apply {
+            setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                startAiVoiceQuestion()
+            }
+        }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(8) })
         inputRow.addView(actionButton("Kirim") {
             val query = input.text.toString().trim()
             if (query.isNotBlank()) sendRealAiQuestion(query)
-        }, LinearLayout.LayoutParams(dp(82), dp(44)))
+        }, LinearLayout.LayoutParams(dp(74), dp(44)))
         return inputRow
     }
 
@@ -1859,29 +2307,68 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun quickGrid(): View {
-        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val rows = listOf(listOf("Kalender", "WarrenAI"), listOf("Temukan Broker Terbaik", "Saham Undervalued"))
-        rows.forEach { rowItems ->
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            rowItems.forEach { label ->
-                row.addView(quickTile(label), LinearLayout.LayoutParams(0, dp(86), 1f).apply { marginEnd = dp(8); bottomMargin = dp(8) })
+        val actions = listOf(
+            QuickAction("Kalender", "Rilis data dan agenda market", "Event", "31", R.color.marketedge_accent),
+            QuickAction("WarrenAI", "Tanya berita dan aset penting", if (hasAiAccess()) "Buka" else "Pro High", "AI", R.color.marketedge_positive),
+            QuickAction("Temukan Broker Terbaik", "Bandingkan fitur dan biaya broker", "Guide", "BR", R.color.marketedge_accent),
+            QuickAction("Saham Undervalued", "Cari kandidat dari valuasi murah", "Screener", "UV", R.color.marketedge_positive)
+        )
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(3), 0, dp(3))
+            background = rounded(R.color.marketedge_card, 10, R.color.marketedge_hairline)
+            actions.forEachIndexed { index, action ->
+                addView(quickActionRow(action))
+                if (index < actions.lastIndex) {
+                    addView(View(context).apply { setBackgroundColor(getColor(R.color.marketedge_hairline)) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
+                        leftMargin = dp(66)
+                        rightMargin = dp(12)
+                    })
+                }
             }
-            grid.addView(row)
         }
-        return grid
     }
 
-    private fun quickTile(label: String): View =
-        TextView(this).apply {
-            text = label
-            gravity = Gravity.CENTER
-            setTextColor(getColor(R.color.marketedge_text_primary))
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            background = rounded(R.color.marketedge_card, 8, R.color.marketedge_hairline)
+    private fun quickActionRow(action: QuickAction): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(64)
+            contentDescription = "${action.label}. ${action.subtitle}. ${action.badge}"
+            setPadding(dp(14), dp(10), dp(10), dp(10))
+            addView(TextView(context).apply {
+                text = action.icon
+                gravity = Gravity.CENTER
+                setTextColor(getColor(R.color.white))
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                background = rounded(action.colorRes, 16)
+            }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(12) })
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(text(action.label, 15f, R.color.marketedge_text_primary, Typeface.BOLD).apply {
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                })
+                addGap(3)
+                addView(text(action.subtitle, 12f, R.color.marketedge_text_muted).apply {
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                })
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(text(action.badge, 11f, action.colorRes, Typeface.BOLD).apply {
+                gravity = Gravity.CENTER
+                maxLines = 1
+                setPadding(dp(9), dp(4), dp(9), dp(4))
+                background = rounded(R.color.marketedge_surface, 12, R.color.marketedge_hairline)
+            })
+            addView(text("›", 24f, R.color.marketedge_text_muted).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(8), 0, 0, 0)
+            })
             setOnClickListener {
                 performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                if (label == "WarrenAI") renderAiChat() else renderQuickDetail(label)
+                if (action.label == "WarrenAI") renderAiChat() else renderQuickDetail(action.label)
             }
         }
 
@@ -2420,7 +2907,12 @@ class MainActivity : AppCompatActivity() {
         }
         val input = editText("Tanya WarrenAI...")
         inputRow.addView(input, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
-        inputRow.addView(iconButton("Mikrofon", "◉"), LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(8) })
+        inputRow.addView(iconButton("Pertanyaan suara ke WarrenAI", "◉").apply {
+            setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                startAiVoiceQuestion()
+            }
+        }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(8) })
         inputRow.addView(actionButton("Kirim") {
             val query = input.text.toString().trim()
             if (query.isNotBlank()) {
@@ -2885,4 +3377,17 @@ class MainActivity : AppCompatActivity() {
         NEWS,
         AI
     }
+
+    private enum class VoiceCaptureMode {
+        COMMAND,
+        AI_QUESTION
+    }
+
+    private data class QuickAction(
+        val label: String,
+        val subtitle: String,
+        val badge: String,
+        val icon: String,
+        val colorRes: Int
+    )
 }
