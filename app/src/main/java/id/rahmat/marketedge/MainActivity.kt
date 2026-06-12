@@ -710,6 +710,14 @@ class MainActivity : AppCompatActivity() {
             commandContains(command, "kalender") -> renderQuickDetail("Kalender").also { speakVoice("Membuka kalender.") }
             commandContains(command, "broker") -> renderQuickDetail("Temukan Broker Terbaik").also { speakVoice("Membuka pencarian broker terbaik.") }
             commandContains(command, "undervalued", "saham murah") -> renderQuickDetail("Saham Undervalued").also { speakVoice("Membuka saham undervalued.") }
+            commandContains(command, "buka github", "github") -> {
+                speakVoice("Membuka GitHub Rahmat Eka Satria.")
+                openDeveloperGithub()
+            }
+            commandContains(command, "about app", "tentang aplikasi", "pembuat") -> {
+                renderAboutApp()
+                speakVoice("Membuka About App. Aplikasi ini dibuat oleh Rahmat Eka Satria. Ucapkan buka GitHub untuk membuka profil GitHub.")
+            }
             else -> speakVoice("Saya belum paham perintah itu. Contoh perintah: buka berita, berita pertama, buka AI, tanya AI tentang Bitcoin, buka watchlist, atau kembali.")
         }
     }
@@ -848,7 +856,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun moreVoiceGuide(): String =
-        "Layar Lainnya. Ada profil, rekomendasi upgrade, akses cepat Kalender, WarrenAI, Temukan Broker Terbaik, dan Saham Undervalued. Ada juga monitor Peringatan, Item Tersimpan, Sentimen Saya, dan Versi Bebas Iklan. Ucapkan buka AI, kalender, broker, saham undervalued, upgrade, atau kembali."
+        "Layar Lainnya. Ada profil, rekomendasi upgrade, akses cepat Kalender, WarrenAI, Temukan Broker Terbaik, dan Saham Undervalued. Ada juga monitor Peringatan, Item Tersimpan, Sentimen Saya, Versi Bebas Iklan, dan About App. Ucapkan buka AI, kalender, broker, saham undervalued, about app, upgrade, atau kembali."
 
     private fun normalizeVoiceCommand(value: String): String = value
         .lowercase(Locale("id", "ID"))
@@ -2489,6 +2497,10 @@ class MainActivity : AppCompatActivity() {
         screen.addView(menuRow("Sentimen Saya", "Ringkasan mood market dari watchlist", marketSentimentLabel()) { renderMonitorDetail("Sentimen Saya") })
         screen.addView(menuRow("Versi Bebas Iklan", "Kelola pengalaman premium", "Pro") { renderMonitorDetail("Versi Bebas Iklan") })
         screen.addGap(16)
+        screen.addView(sectionHeader("Aplikasi"))
+        screen.addGap(2)
+        screen.addView(menuRow("About App", "Pembuat aplikasi dan tautan GitHub", "Info") { renderAboutApp() })
+        screen.addGap(16)
         screen.addView(sectionHeader("Live Market"))
         screen.addGap(8)
         if (marketAssets.isEmpty()) {
@@ -2809,6 +2821,68 @@ class MainActivity : AppCompatActivity() {
         screen.addView(actionButton("Aktifkan Versi Bebas Iklan") {
             if (isLoggedIn()) renderSubscription(AuthEntry.MORE) else renderAuth(AuthEntry.MORE)
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
+    }
+
+    private fun renderAboutApp() {
+        val screen = moreChildScreen("About App")
+        screen.addView(card().apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            addView(ImageView(context).apply {
+                setImageResource(R.drawable.logoiconapp)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                contentDescription = "Logo MarketEdge"
+            }, LinearLayout.LayoutParams(dp(64), dp(64)).apply { marginEnd = dp(14) })
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(text("MarketEdge", 24f, R.color.marketedge_text_primary, Typeface.BOLD))
+                addGap(3)
+                addView(text("Market intelligence, berita, dan WarrenAI", 13f, R.color.marketedge_text_secondary))
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        })
+        screen.addGap(12)
+        screen.addView(card().apply {
+            addView(statRow("Pembuat", "Rahmat Eka Satria"))
+            addGap(10)
+            addView(githubProfileRow())
+        })
+        screen.addGap(12)
+        screen.addView(actionButton("Buka GitHub @rhmatzeka") { openDeveloperGithub() }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
+        screen.addGap(10)
+        screen.addView(infoCard("Tekan tautan GitHub untuk membuka profil developer di browser."))
+        displayScroll(screen)
+    }
+
+    private fun githubProfileRow(): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            contentDescription = "GitHub @rhmatzeka, ketuk untuk membuka profil GitHub"
+            setPadding(0, dp(6), 0, dp(6))
+            addView(text("GitHub", 14f, R.color.marketedge_text_primary, Typeface.BOLD), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(text("@rhmatzeka", 14f, R.color.marketedge_accent, Typeface.BOLD).apply {
+                gravity = Gravity.END
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(text("›", 24f, R.color.marketedge_text_muted), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = dp(10)
+            })
+            setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                openDeveloperGithub()
+            }
+        }
+
+    private fun openDeveloperGithub() {
+        val opened = runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/rhmatzeka")))
+        }.isSuccess
+        if (!opened) {
+            val message = "Browser belum tersedia untuk membuka GitHub."
+            if (voiceAssistantEnabled) speakVoice(message) else Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun renderQuickDetail(label: String) {
