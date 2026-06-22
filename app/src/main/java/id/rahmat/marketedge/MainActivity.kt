@@ -2497,6 +2497,13 @@ class MainActivity : AppCompatActivity() {
         screen.addView(menuRow("Sentimen Saya", "Ringkasan mood market dari watchlist", marketSentimentLabel()) { renderMonitorDetail("Sentimen Saya") })
         screen.addView(menuRow("Versi Bebas Iklan", "Kelola pengalaman premium", "Pro") { renderMonitorDetail("Versi Bebas Iklan") })
         screen.addGap(16)
+        screen.addView(sectionHeader("Aksesibilitas"))
+        screen.addGap(2)
+        val voiceBadge = if (voiceAssistantEnabled) "Aktif" else "Nonaktif"
+        screen.addView(menuRow("Mode Tunanetra (Akses Suara)", "Aktifkan asisten suara dan kontrol tombol volume", voiceBadge) {
+            toggleVoiceAssistant()
+        })
+        screen.addGap(16)
         screen.addView(sectionHeader("Aplikasi"))
         screen.addGap(2)
         screen.addView(menuRow("About App", "Pembuat aplikasi dan tautan GitHub", "Info") { renderAboutApp() })
@@ -2510,6 +2517,17 @@ class MainActivity : AppCompatActivity() {
             marketAssets.take(2).forEach { screen.addView(compactAsset(it)) }
         }
         displayScroll(screen)
+    }
+
+    private fun toggleVoiceAssistant() {
+        val nextState = !voiceAssistantEnabled
+        val spoken = if (nextState) {
+            "Mode akses suara aktif. Mulai sekarang tekan volume atas dari layar mana pun untuk membacakan layar dan memberi perintah."
+        } else {
+            "Baik. Mode akses suara tidak diaktifkan."
+        }
+        setVoiceAssistantPreference(nextState, spoken)
+        renderMore()
     }
 
     private fun profileCard(): View = card().apply {
