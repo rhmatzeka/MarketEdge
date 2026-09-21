@@ -68,3 +68,7 @@ app/src/main/java/id/rahmat/marketedge/
 ## Notes
 
 The UI is built in code (no XML layouts) to keep this early version simple and stable. Retrofit, Room, Paging, or a chart library could be added later.
+
+## License
+
+Released under the [MIT License](LICENSE).
