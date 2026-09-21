@@ -1,83 +1,70 @@
 # MarketEdge
 
-MarketEdge adalah aplikasi Android market/news bergaya Investing.com dengan tampilan dark, market feed real, halaman detail instrumen interaktif, berita terbaru, watchlist, dan WarrenAI.
+An Android app for following markets and financial news, in the style of Investing.com. It shows live crypto, forex, and gold prices, detailed charts, the latest headlines, your watchlist, and **WarrenAI**, a chat assistant that answers questions using the market data and news the app just loaded.
 
-## Fitur
+## Features
 
-- Splash screen dengan animasi masuk.
-- Bottom navigation: Pasar, Berita, Ide, Watchlist, Lainnya.
-- Halaman Pasar bergaya list padat seperti Investing.com.
-- Detail instrumen pasar dengan chart harga real, pilihan rentang waktu, dan tab Ikhtisar, Teknikal, Berita, Analisis, Data.
-- Statistik instrumen: Bid/Ask, rentang harian, rentang 52 minggu, close sebelumnya, pembukaan, volume 24 jam, market cap, peringkat, dan supply beredar.
-- Tombol tampilkan lebih banyak untuk membuka data market lanjutan.
-- Berita terbaru dengan halaman detail, gambar, share, sumber asli, dan konteks untuk ditanyakan ke AI.
-- Watchlist aset dengan mode edit dan picker aset.
-- WarrenAI chat dengan respons berbasis data market/headline yang berhasil dimuat.
-- UI dark theme dengan aksen orange.
+- **Markets**: a compact, fast price list (the tab labels are in Indonesian: Pasar, Berita, Ide, Watchlist, Lainnya)
+- **Instrument details**: a real price chart with time ranges, plus Overview, Technical, News, Analysis, and Data tabs
+- **Key stats**: bid/ask, daily range, 52-week range, previous close, open, 24h volume, market cap, rank, and circulating supply
+- **News**: latest headlines with a detail page, image, share button, link to the source, and an "ask the AI about this" option
+- **Watchlist** with an edit mode and an asset picker
+- **WarrenAI chat** that works even without an API key (see below)
+- Dark theme with orange accents and an animated splash screen
 
-## Sumber Data
+## Where the data comes from
 
-Aplikasi memakai public market/news feed:
+All feeds are public and free:
 
-- CoinGecko untuk market crypto, chart history, dan statistik market detail.
-- Coinbase public order book untuk Bid/Ask crypto jika pair tersedia.
-- Currency feed untuk forex, emas, dan perak.
-- Spaceflight News untuk headline berita terbaru.
+| Data | Source |
+| --- | --- |
+| Crypto prices, chart history, and market stats | CoinGecko |
+| Crypto bid/ask | Coinbase public order book |
+| Forex, gold, and silver | A public currency feed |
+| News headlines | Spaceflight News API |
 
-Jika feed tidak tersedia atau koneksi gagal, aplikasi menampilkan state loading/error/retry dengan fallback data yang sudah berhasil dimuat.
+If a feed is down, the app shows a loading, error, or retry state and falls back to data it already loaded.
 
-## Stack
+## Tech stack
 
-- Kotlin
-- Android Views programmatic UI
-- Material Components
-- Clean Architecture ringan: `data`, `domain`, `presentation`
-- Custom `SparklineView` untuk chart
-- `HttpURLConnection` + `org.json` untuk integrasi feed tanpa dependency networking tambahan
+Kotlin, Android Views built in code, Material Components, a light clean-architecture layout (`data`, `domain`, `presentation`), a custom `SparklineView` for charts, and `HttpURLConnection` + `org.json` for networking (no extra libraries).
 
-## Struktur Project
+## Build and run
 
-```text
-app/src/main/java/id/rahmat/marketedge/
-├── data/
-│   ├── api/
-│   └── repository/
-├── domain/
-│   ├── model/
-│   ├── repository/
-│   └── usecase/
-├── presentation/
-│   └── components/
-├── MainActivity.kt
-└── MarketEdgeApplication.kt
-```
-
-## Build
-
-Buka project di Android Studio, lalu jalankan:
+Open the project in Android Studio, or build from the command line:
 
 ```bash
 ./gradlew :app:assembleDebug
 ```
 
-## AI Chat
+The debug APK is saved to `app/build/outputs/apk/debug/app-debug.apk`.
 
-AI online bersifat opsional. Salin `.env.example` menjadi `.env`, lalu isi Groq API key dari `https://console.groq.com/keys`:
+## Turn on the online AI (optional)
 
-```env
-AI_API_KEY=isi_api_key_groq
-AI_BASE_URL=https://api.groq.com/openai/v1/chat/completions
-AI_MODEL=llama-3.1-8b-instant
-```
+1. Copy `.env.example` to `.env`.
+2. Add a free Groq API key from https://console.groq.com/keys:
 
-Build ulang aplikasi setelah mengubah `.env`. Jika `AI_API_KEY` kosong, halaman AI tetap berjalan dengan analisis lokal berbasis market feed dan berita yang berhasil dimuat.
+   ```env
+   AI_API_KEY=your_groq_key
+   AI_BASE_URL=https://api.groq.com/openai/v1/chat/completions
+   AI_MODEL=llama-3.1-8b-instant
+   ```
 
-APK debug akan dibuat di:
+3. Rebuild the app.
+
+Without `AI_API_KEY`, WarrenAI still works: it gives a simple local analysis based on the loaded prices and news.
+
+## Project structure
 
 ```text
-app/build/outputs/apk/debug/app-debug.apk
+app/src/main/java/id/rahmat/marketedge/
+├── data/            API clients and repositories
+├── domain/          Models, repository interfaces, and use cases
+├── presentation/    Screens and UI components
+├── MainActivity.kt
+└── MarketEdgeApplication.kt
 ```
 
-## Catatan
+## Notes
 
-Project ini masih memakai UI programmatic agar cepat stabil di project Android awal. Integrasi Retrofit, Room, Paging, dan chart library eksternal bisa ditambahkan pada iterasi berikutnya.
+The UI is built in code (no XML layouts) to keep this early version simple and stable. Retrofit, Room, Paging, or a chart library could be added later.
