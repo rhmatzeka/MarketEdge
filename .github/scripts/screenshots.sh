@@ -10,6 +10,12 @@ mkdir -p "$OUT"
 
 adb wait-for-device
 adb install -r -g app/build/outputs/apk/debug/app-debug.apk
+# CI emulators often show "Pixel Launcher isn't responding" over the app: we never
+# need the home screen, so turn the launcher off and hide crash/ANR dialogs.
+adb shell pm disable-user --user 0 com.google.android.apps.nexuslauncher >/dev/null 2>&1 || true
+adb shell settings put global hide_error_dialogs 1 || true
+adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS >/dev/null 2>&1 || true
+sleep 10
 
 # Clean status bar: fixed clock, full battery and signal, no notification icons.
 adb shell settings put global sysui_demo_allowed 1
@@ -46,11 +52,22 @@ write_prefs marketedge_accessibility <<'XML'
 </map>
 XML
 
+center() { python3 "$HERE/ui_find.py" /tmp/ui.xml "$1" "${2:-first}"; }
 dump() {
   adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 || true
   adb pull /sdcard/ui.xml /tmp/ui.xml >/dev/null 2>&1 || true
+  # Dismiss any "... isn't responding" dialog from the system and look again.
+  local wait_button
+  wait_button=$(center "Wait")
+  if [ -n "$wait_button" ] && [ -n "$(center "~isn't responding")" ]; then
+    echo "dismissing ANR dialog"
+    # shellcheck disable=SC2086
+    adb shell input tap $wait_button
+    sleep 2
+    adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 || true
+    adb pull /sdcard/ui.xml /tmp/ui.xml >/dev/null 2>&1 || true
+  fi
 }
-center() { python3 "$HERE/ui_find.py" /tmp/ui.xml "$1" "${2:-first}"; }
 wait_text() {
   for _ in $(seq 1 "${2:-45}"); do
     dump
@@ -74,6 +91,7 @@ tap_text() {
 }
 shot() {
   sleep 2
+  dump
   adb exec-out screencap -p > "$OUT/$1.png"
   echo "saved $1"
 }
