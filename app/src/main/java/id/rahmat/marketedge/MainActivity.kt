@@ -42,6 +42,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import id.rahmat.marketedge.data.api.MarketNewsClient
 import id.rahmat.marketedge.data.api.PublicApiClient
 import id.rahmat.marketedge.data.local.UserStore
 import id.rahmat.marketedge.data.repository.RealMarketEdgeRepository
@@ -81,7 +82,8 @@ private const val KEY_VOICE_ASSISTANT_ENABLED = "voice_assistant_enabled"
 private const val KEY_VOICE_PROMPT_VERSION = "voice_prompt_version"
 private const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
 private const val CURRENT_VOICE_PROMPT_VERSION = 4
-private val DEFAULT_WATCHLIST = listOf("BTC", "ETH", "SOL")
+private val DEFAULT_WATCHLIST = listOf("IHSG", "BBCA", "BTC", "ETH")
+private const val NEWS_ALL = "Semua"
 
 class MainActivity : AppCompatActivity() {
     private val apiClient = PublicApiClient()
@@ -125,8 +127,8 @@ class MainActivity : AppCompatActivity() {
     private var activeMarketSymbol: String? = null
     private var selectedMarketDetailTab = "Ikhtisar"
     private var marketDetailExpanded = false
-    private var selectedNewsCategory = "Real News"
-    private val newsCategories = listOf("Real News", "Latest", "NASA", "SpaceX", "World", "Technology")
+    private var selectedNewsCategory = NEWS_ALL
+    private val newsCategories = listOf(NEWS_ALL) + MarketNewsClient.CATEGORIES
     private var currentTopLevelNavId = R.id.nav_market
     // Which screen is showing. Background loads only redraw when the user is still on
     // the screen that started them, so they never pull the user back from elsewhere.
@@ -1403,12 +1405,10 @@ class MainActivity : AppCompatActivity() {
     private fun marketDetailStatsKey(asset: MarketAsset): String =
         asset.chartId ?: asset.symbol
 
-    private fun formatRawPrice(asset: MarketAsset, value: Double): String =
-        if (asset.category == "Kripto" || asset.symbol.contains("/USD")) {
-            "$" + String.format(Locale("id", "ID"), if (kotlin.math.abs(value) < 10) "%.4f" else "%.2f", value)
-        } else {
-            String.format(Locale("id", "ID"), if (kotlin.math.abs(value) < 10) "%.4f" else "%.2f", value)
-        }
+    private fun formatRawPrice(asset: MarketAsset, value: Double): String {
+        val prefix = listOf("Rp", "$").firstOrNull { asset.price.startsWith(it) }.orEmpty()
+        return prefix + String.format(Locale("id", "ID"), if (kotlin.math.abs(value) < 10) "%.4f" else "%.2f", value)
+    }
 
     private fun marketChartRangeChips(asset: MarketAsset): HorizontalScrollView {
         val labels = listOf("1Hr", "1Mgg", "1Bln", "1Thn", "5Thn", "Maks")
@@ -1591,7 +1591,7 @@ class MainActivity : AppCompatActivity() {
         screen.addGap(10)
         screen.addView(featuredNews(visibleNews.first()))
         screen.addGap(10)
-        screen.addView(sectionHeader(if (selectedNewsCategory == "Latest") "Berita Terbaru" else selectedNewsCategory, "${visibleNews.size} artikel"))
+        screen.addView(sectionHeader(if (selectedNewsCategory == NEWS_ALL) "Berita Terbaru" else selectedNewsCategory, "${visibleNews.size} artikel"))
         screen.addGap(10)
         visibleNews.drop(1).forEach { article ->
             screen.addView(newsSmall(article))
@@ -1621,7 +1621,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun filteredNewsArticles(): List<NewsArticle> = when (selectedNewsCategory) {
-        "Latest", "Real News" -> newsArticles
+        NEWS_ALL -> newsArticles
         else -> newsArticles.filter { it.category == selectedNewsCategory }
     }
 
@@ -1634,7 +1634,7 @@ class MainActivity : AppCompatActivity() {
     private fun emptyNewsCategoryCard(): View = card().apply {
         addView(text("Belum ada berita $selectedNewsCategory", 16f, R.color.marketedge_text_primary, Typeface.BOLD))
         addGap(6)
-        addView(text("Coba kategori Latest atau Real News untuk melihat semua headline terbaru yang tersedia.", 13f, R.color.marketedge_text_secondary))
+        addView(text("Coba kategori Semua untuk melihat semua headline terbaru yang tersedia.", 13f, R.color.marketedge_text_secondary))
     }
 
     private fun featuredNews(article: NewsArticle): View =
@@ -2070,7 +2070,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun aiPickExplanation(strongest: MarketAsset?, weakest: MarketAsset?): String = when {
-        strongest == null -> "Data market sedang dimuat. AI akan memakai harga crypto, mata uang, emas, perak, dan headline berita yang tersedia."
+        strongest == null -> "Data market sedang dimuat. AI akan memakai harga saham, indeks, kripto, mata uang, emas, minyak, dan headline berita yang tersedia."
         weakest == null -> "${strongest.symbol} sedang menjadi mover terkuat. Tetap cek berita terkait dan risiko volatilitas sebelum mengambil keputusan."
         else -> "${strongest.symbol} terlihat paling kuat, sementara ${weakest.symbol} paling lemah. Ini bukan saran beli/jual, tapi sinyal awal untuk ditanyakan ke AI bersama konteks berita terbaru."
     }
@@ -2793,7 +2793,7 @@ class MainActivity : AppCompatActivity() {
         screen.addGap(8)
         listOf(
             "BTC bergerak lebih dari 3% dalam 24 jam" to "Harga",
-            "Headline baru dari sumber NASA atau SpaceX" to "Berita",
+            "Headline baru tentang aset di watchlist" to "Berita",
             "Watchlist melewati volatilitas harian tinggi" to "Risiko"
         ).forEach { (label, tag) ->
             screen.addView(monitorCard(label, tag, "Siap dipantau"))

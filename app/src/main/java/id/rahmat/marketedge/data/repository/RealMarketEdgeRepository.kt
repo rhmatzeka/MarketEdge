@@ -19,6 +19,7 @@ class RealMarketEdgeRepository(
      */
     override fun marketAssets(): List<MarketAsset> {
         val feeds = listOf(
+            CompletableFuture.supplyAsync { runCatching { apiClient.fetchYahooMarkets() } },
             CompletableFuture.supplyAsync { runCatching { apiClient.fetchCurrencyAndCommodityMarkets() } },
             CompletableFuture.supplyAsync { runCatching { apiClient.fetchCoinGeckoMarkets() } }
         ).map { it.join() }
@@ -29,7 +30,7 @@ class RealMarketEdgeRepository(
         return assets
     }
 
-    override fun topNews(): List<NewsArticle> = apiClient.fetchSpaceflightNews()
+    override fun topNews(): List<NewsArticle> = apiClient.fetchMarketNews()
 
     override fun initialChat(): List<ChatMessage> = listOf(
         ChatMessage(
