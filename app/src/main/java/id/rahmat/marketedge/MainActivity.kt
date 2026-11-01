@@ -17,10 +17,12 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.net.Uri
 import android.text.Editable
 import android.text.Html
 import android.text.TextUtils
 import android.text.TextWatcher
+import android.util.LruCache
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
@@ -41,12 +43,12 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import id.rahmat.marketedge.data.api.PublicApiClient
+import id.rahmat.marketedge.data.local.UserStore
 import id.rahmat.marketedge.data.repository.RealMarketEdgeRepository
 import id.rahmat.marketedge.domain.model.ChatMessage
 import id.rahmat.marketedge.domain.model.MarketAsset
 import id.rahmat.marketedge.domain.model.MarketDetailStats
 import id.rahmat.marketedge.domain.model.NewsArticle
-import id.rahmat.marketedge.domain.model.PastChampion
 import id.rahmat.marketedge.presentation.components.SparklineView
 import id.rahmat.marketedge.presentation.components.addGap
 import id.rahmat.marketedge.presentation.components.card
@@ -79,14 +81,19 @@ private const val KEY_VOICE_ASSISTANT_ENABLED = "voice_assistant_enabled"
 private const val KEY_VOICE_PROMPT_VERSION = "voice_prompt_version"
 private const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
 private const val CURRENT_VOICE_PROMPT_VERSION = 4
+private val DEFAULT_WATCHLIST = listOf("BTC", "ETH", "SOL")
 
 class MainActivity : AppCompatActivity() {
     private val apiClient = PublicApiClient()
     private val repository = RealMarketEdgeRepository(apiClient)
-    private val executor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val userStore by lazy { UserStore(applicationContext) }
+    // Several workers so a slow market refresh does not hold up news, charts or AI answers.
+    private val executor: ExecutorService = Executors.newFixedThreadPool(4)
     private val imageExecutor: ExecutorService = Executors.newFixedThreadPool(3)
     private val handler = Handler(Looper.getMainLooper())
-    private val imageCache = ConcurrentHashMap<String, Bitmap>()
+    private val imageCache = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 8).toInt()) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
     private val articleContentCache = ConcurrentHashMap<String, String>()
     private val articleContentErrors = ConcurrentHashMap<String, String>()
     private val articleContentLoading = ConcurrentHashMap<String, Boolean>()
@@ -104,8 +111,8 @@ class MainActivity : AppCompatActivity() {
     private var subscriptionTier = SubscriptionTier.FREE
     private var marketAssets = emptyList<MarketAsset>()
     private var newsArticles = emptyList<NewsArticle>()
-    private val watchlistSymbols = linkedSetOf("BTC", "ETH", "SOL")
-    private val savedArticleIds = linkedSetOf<String>()
+    private val watchlistSymbols = linkedSetOf<String>()
+    private val savedArticles = linkedMapOf<String, NewsArticle>()
     private var watchlistEditMode = false
     private var marketLoading = false
     private var newsLoading = false
@@ -121,6 +128,9 @@ class MainActivity : AppCompatActivity() {
     private var selectedNewsCategory = "Real News"
     private val newsCategories = listOf("Real News", "Latest", "NASA", "SpaceX", "World", "Technology")
     private var currentTopLevelNavId = R.id.nav_market
+    // Which screen is showing. Background loads only redraw when the user is still on
+    // the screen that started them, so they never pull the user back from elsewhere.
+    private var screenId = ""
     private var hardwareBackAction: (() -> Unit)? = null
     private var activeArticleId: String? = null
     private var currentArticleBackAction: (() -> Unit)? = null
@@ -147,9 +157,29 @@ class MainActivity : AppCompatActivity() {
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = getColor(R.color.marketedge_surface)
         setupHardwareBack()
+        restoreUserState()
         loadVoiceAccessibilityChoice()
         setupVoiceAccessibility()
         showSplash()
+    }
+
+    private fun restoreUserState() {
+        currentUserName = userStore.userName
+        currentUserEmail = userStore.userEmail
+        subscriptionTier = SubscriptionTier.values().firstOrNull { it.name == userStore.subscriptionTier } ?: SubscriptionTier.FREE
+        watchlistSymbols.clear()
+        watchlistSymbols.addAll(userStore.watchlist(DEFAULT_WATCHLIST))
+        savedArticles.clear()
+        userStore.savedArticles().forEach { savedArticles[it.id] = it }
+    }
+
+    private fun saveAccount() {
+        userStore.saveAccount(currentUserName, currentUserEmail, subscriptionTier.name)
+    }
+
+    /** Runs [block] on the main thread unless the activity is already gone. */
+    private fun onUi(block: () -> Unit) {
+        runOnUiThread { if (!isDestroyed) block() }
     }
 
     private fun loadVoiceAccessibilityChoice() {
@@ -222,6 +252,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
         executor.shutdownNow()
         imageExecutor.shutdownNow()
         speechRecognizer?.destroy()
@@ -297,7 +328,7 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(voiceDock, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)))
-        root.addView(bottomNav, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(76)))
+        root.addView(bottomNav, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         setContentView(root)
         applyInsets(root)
         refreshVoiceDock()
@@ -678,6 +709,7 @@ class MainActivity : AppCompatActivity() {
                 speakVoice("Kembali.")
                 handleHardwareBack()
             }
+            commandContains(command, "daftar pantau") -> openTopLevelByVoice(R.id.nav_watchlist, "Membuka watchlist.")
             commandContains(command, "masuk", "login", "daftar") -> {
                 renderAuth(AuthEntry.MORE)
                 speakVoice("Membuka halaman masuk dan daftar.")
@@ -864,8 +896,10 @@ class MainActivity : AppCompatActivity() {
         .replace(Regex("\\s+"), " ")
         .trim()
 
-    private fun commandContains(command: String, vararg keywords: String): Boolean =
-        keywords.any { command.contains(it) }
+    private fun commandContains(command: String, vararg keywords: String): Boolean {
+        val padded = " $command "
+        return keywords.any { padded.contains(" $it ") }
+    }
 
     private fun extractVoiceNumber(command: String): Int? {
         Regex("\\b([0-9]{1,2})\\b").find(command)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
@@ -938,6 +972,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderMarket() {
+        screenId = "market"
         syncBottomNav(R.id.nav_market)
         setTopLevelScreen(R.id.nav_market)
         val screen = screenScroll()
@@ -949,12 +984,12 @@ class MainActivity : AppCompatActivity() {
                 screen.addGap(10)
             }
             marketError != null -> {
-                screen.addView(errorCard("Gagal memuat market real", marketError.orEmpty()) { loadMarkets(force = true) { renderMarket() } })
+                screen.addView(errorCard("Gagal memuat market real", marketError.orEmpty()) { loadMarkets(force = true, done = redrawIfOn("market") { renderMarket() }) })
                 screen.addGap(10)
             }
             marketAssets.isEmpty() -> {
                 screen.addView(loadingCard("Menyiapkan ringkasan pasar..."))
-                loadMarkets { renderMarket() }
+                loadMarkets(done = redrawIfOn("market") { renderMarket() })
                 screen.addGap(10)
             }
             else -> {
@@ -1078,6 +1113,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openMarketDetail(asset: MarketAsset, refreshData: Boolean = true) {
+        screenId = marketDetailScreenId(asset)
         activeArticleId = null
         currentArticleBackAction = null
         setChildBack { renderMarket() }
@@ -1123,17 +1159,23 @@ class MainActivity : AppCompatActivity() {
         screen.addView(marketChartRangeChips(asset))
         activeMarketChartKey = chartKey
         if (refreshData) {
+            val detailId = marketDetailScreenId(asset)
             loadMarketChart(asset) {
-                if (activeMarketChartKey == chartKey) openMarketDetail(asset, refreshData = false)
+                if (screenId == detailId && activeMarketChartKey == chartKey) openMarketDetail(asset, refreshData = false)
             }
-            loadMarketDetailStats(asset) {
-                if (activeMarketSymbol == asset.symbol) openMarketDetail(asset, refreshData = false)
-            }
+            loadMarketDetailStats(asset, redrawIfOn(detailId) { openMarketDetail(asset, refreshData = false) })
         }
         screen.addGap(18)
         screen.addView(marketDetailTabContent(asset))
         displayScroll(screen)
     }
+
+    private fun marketDetailScreenId(asset: MarketAsset) = "detail:${asset.symbol}"
+
+    private fun articleScreenId(article: NewsArticle) = "article:${article.id}"
+
+    /** Redraws with [render] only if the user is still on screen [id]. */
+    private fun redrawIfOn(id: String, render: () -> Unit): () -> Unit = { if (screenId == id) render() }
 
     private fun marketDetailQuoteCard(asset: MarketAsset): View = card().apply {
         setPadding(dp(12), dp(10), dp(12), dp(10))
@@ -1231,12 +1273,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun detailStatsCard(asset: MarketAsset, stats: MarketDetailStats?): View = card().apply {
         setPadding(dp(12), dp(10), dp(12), dp(10))
-        addDetailStatRows(stats)
+        addDetailStatRows(asset, stats)
         addGap(8)
         addMoreButton(asset)
     }
 
-    private fun LinearLayout.addDetailStatRows(stats: MarketDetailStats?) {
+    private fun LinearLayout.addDetailStatRows(asset: MarketAsset, stats: MarketDetailStats?) {
+        val loading = marketDetailStatsLoading[marketDetailStatsKey(asset)] == true
+        fun detailValue(stats: MarketDetailStats?, value: (MarketDetailStats) -> String): String =
+            stats?.let(value)?.takeIf { it.isNotBlank() } ?: if (loading) "Memperbarui..." else "-"
         addView(statRow("Bid/Ask", detailValue(stats) { it.bidAsk }))
         addView(detailDivider())
         addView(statRow("Rentang harian", detailValue(stats) { it.dayRange }))
@@ -1287,7 +1332,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun LinearLayout.addNewsTab(asset: MarketAsset) {
-        if (newsArticles.isEmpty()) loadNews { if (activeMarketSymbol == asset.symbol) openMarketDetail(asset, refreshData = false) }
+        if (newsArticles.isEmpty()) loadNews(done = redrawIfOn(marketDetailScreenId(asset)) { openMarketDetail(asset, refreshData = false) })
         val related = newsArticles.filter {
             it.title.contains(asset.symbol, ignoreCase = true) ||
                 it.title.contains(asset.name, ignoreCase = true) ||
@@ -1352,12 +1397,6 @@ class MainActivity : AppCompatActivity() {
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)))
     }
 
-    private fun detailValue(stats: MarketDetailStats?, value: (MarketDetailStats) -> String): String =
-        stats?.let(value)?.takeIf { it.isNotBlank() } ?: when {
-            marketDetailStatsLoading.values.any { it } -> "Memperbarui..."
-            else -> "-"
-        }
-
     private fun marketDetailStats(asset: MarketAsset): MarketDetailStats? =
         marketDetailStatsCache[marketDetailStatsKey(asset)]
 
@@ -1419,7 +1458,7 @@ class MainActivity : AppCompatActivity() {
         marketChartErrors.remove(key)
         executor.execute {
             val result = runCatching { apiClient.fetchMarketChart(asset, days) }
-            runOnUiThread {
+            onUi {
                 result.onSuccess { points ->
                     if (points.size >= 2) {
                         marketChartCache[key] = points
@@ -1441,7 +1480,7 @@ class MainActivity : AppCompatActivity() {
         marketDetailStatsErrors.remove(key)
         executor.execute {
             val result = runCatching { apiClient.fetchMarketDetailStats(asset) }
-            runOnUiThread {
+            onUi {
                 result.onSuccess { marketDetailStatsCache[key] = it }
                     .onFailure { marketDetailStatsErrors[key] = it.message ?: it.javaClass.simpleName }
                 marketDetailStatsLoading.remove(key)
@@ -1507,6 +1546,7 @@ class MainActivity : AppCompatActivity() {
         }
 
     private fun renderNews() {
+        screenId = "news"
         syncBottomNav(R.id.nav_news)
         setTopLevelScreen(R.id.nav_news)
         val screen = screenScroll()
@@ -1530,13 +1570,13 @@ class MainActivity : AppCompatActivity() {
                 return
             }
             newsError != null -> {
-                screen.addView(errorCard("Gagal memuat berita real", newsError.orEmpty()) { loadNews(force = true) { renderNews() } })
+                screen.addView(errorCard("Gagal memuat berita real", newsError.orEmpty()) { loadNews(force = true, done = redrawIfOn("news") { renderNews() }) })
                 displayScroll(screen)
                 return
             }
             newsArticles.isEmpty() -> {
                 screen.addView(loadingCard("Menyiapkan headline pilihan..."))
-                loadNews { renderNews() }
+                loadNews(done = redrawIfOn("news") { renderNews() })
                 displayScroll(screen)
                 return
             }
@@ -1685,6 +1725,7 @@ class MainActivity : AppCompatActivity() {
             renderAuth(AuthEntry.NEWS)
             return
         }
+        screenId = articleScreenId(article)
         activeArticleId = article.id
         currentArticleBackAction = onBack
         setChildBack(onBack)
@@ -1758,7 +1799,7 @@ class MainActivity : AppCompatActivity() {
         ) return
         executor.execute {
             val result = runCatching { fetchArticleText(url) }
-            runOnUiThread {
+            onUi {
                 articleContentLoading.remove(article.id)
                 result.onSuccess { content ->
                     if (content.length > cleanSummary(article).length) {
@@ -1769,7 +1810,7 @@ class MainActivity : AppCompatActivity() {
                 }.onFailure {
                     articleContentErrors[article.id] = it.message ?: it.javaClass.simpleName
                 }
-                if (activeArticleId == article.id) {
+                if (screenId == articleScreenId(article)) {
                     openNewsDetail(article, currentArticleBackAction ?: { renderNews() })
                 }
             }
@@ -1838,7 +1879,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun openArticleSource(article: NewsArticle) {
         val url = article.sourceUrl?.takeIf { it.startsWith("http") } ?: return
-        startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+        val opened = runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.isSuccess
+        if (!opened) Toast.makeText(this, "Belum ada browser untuk membuka sumber berita.", Toast.LENGTH_SHORT).show()
     }
 
     private fun articleImage(article: NewsArticle, heightDp: Int, compact: Boolean = false): FrameLayout =
@@ -1872,8 +1914,8 @@ class MainActivity : AppCompatActivity() {
         }
         imageExecutor.execute {
             val bitmap = runCatching { downloadBitmap(url) }.getOrNull() ?: return@execute
-            imageCache[url] = bitmap
-            runOnUiThread {
+            imageCache.put(url, bitmap)
+            onUi {
                 if (imageView.tag == url) imageView.setImageBitmap(bitmap)
             }
         }
@@ -1928,17 +1970,17 @@ class MainActivity : AppCompatActivity() {
     private fun shareArticle(article: NewsArticle) {
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, "${article.title}\n\n${article.summary}")
+            putExtra(Intent.EXTRA_TEXT, listOfNotNull(article.title, article.summary.ifBlank { null }, article.sourceUrl).joinToString("\n\n"))
         }, getString(R.string.share)))
     }
 
     private fun renderIdeas() {
+        screenId = "ideas"
         activeAiSurface = AiSurface.PAGE
         val shouldScrollToChat = pendingIdeasChatScroll
         pendingIdeasChatScroll = false
         syncBottomNav(R.id.nav_ideas)
         setTopLevelScreen(R.id.nav_ideas)
-        val pick = repository.aiPick()
         val screen = screenScroll()
         screen.addView(topBar("AI") { renderSearch() })
         if (!hasAiAccess()) {
@@ -1953,9 +1995,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (chatMessages.isEmpty()) chatMessages.addAll(repository.initialChat())
-        if (marketAssets.isEmpty()) loadMarkets { renderIdeas() }
-        if (newsArticles.isEmpty()) loadNews { renderIdeas() }
-        screen.addView(sectionHeader("Aset Pilihan AI", pick.market))
+        if (marketAssets.isEmpty()) loadMarkets(done = redrawIfOn("ideas") { renderIdeas() })
+        if (newsArticles.isEmpty()) loadNews(done = redrawIfOn("ideas") { renderIdeas() })
+        screen.addView(sectionHeader("Aset Pilihan AI", "Market global"))
         screen.addGap(10)
         screen.addView(aiPickCard())
         screen.addGap(16)
@@ -2209,16 +2251,6 @@ class MainActivity : AppCompatActivity() {
         return box
     }
 
-    private fun championItem(champion: PastChampion): View = card().apply {
-        addView(text("${champion.symbol}  ${champion.companyName}", 16f, R.color.marketedge_text_primary, Typeface.BOLD))
-        addGap(5)
-        addView(text("${champion.returnPercent} sejak ditambahkan", 20f, R.color.marketedge_positive, Typeface.BOLD))
-        addGap(7)
-        addView(text("${champion.dateAdded} - ${champion.dateRemoved} • ${champion.addedPrice} → ${champion.removedPrice}", 12f, R.color.marketedge_text_muted))
-        addGap(8)
-        addView(text(champion.thesis, 13f, R.color.marketedge_text_secondary))
-    }
-
     private fun assetIdeaItem(asset: MarketAsset): View = card().apply {
         addView(text("${asset.symbol}  ${asset.name}", 16f, R.color.marketedge_text_primary, Typeface.BOLD))
         addGap(5)
@@ -2233,13 +2265,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderWatchlist() {
+        screenId = "watchlist"
         syncBottomNav(R.id.nav_watchlist)
         setTopLevelScreen(R.id.nav_watchlist)
         val screen = screenScroll()
         screen.addView(watchlistToolbar())
         if (marketAssets.isEmpty()) {
             screen.addView(loadingCard("Memperbarui aset watchlist..."))
-            loadMarkets { renderWatchlist() }
+            loadMarkets(done = redrawIfOn("watchlist") { renderWatchlist() })
         } else {
             val watched = watchlistAssets()
             screen.addView(watchlistSummaryCard(watched))
@@ -2260,7 +2293,7 @@ class MainActivity : AppCompatActivity() {
             screen.addView(sectionHeader("Berita tersimpan", "memuat"))
             screen.addGap(8)
             screen.addView(loadingCard("Memuat berita untuk watchlist..."))
-            loadNews { renderWatchlist() }
+            loadNews(done = redrawIfOn("watchlist") { renderWatchlist() })
         } else {
             val saved = savedNewsArticles()
             screen.addView(sectionHeader("Berita tersimpan", "${saved.size} disimpan"))
@@ -2347,14 +2380,14 @@ class MainActivity : AppCompatActivity() {
                     addGap(8)
                     addView(secondaryActionButton("Hapus") {
                         watchlistSymbols.remove(asset.symbol)
+                        userStore.saveWatchlist(watchlistSymbols)
                         renderWatchlist()
                     }, LinearLayout.LayoutParams(dp(72), dp(34)))
                 }
             })
         }
 
-    private fun savedNewsArticles(): List<NewsArticle> =
-        savedArticleIds.mapNotNull { id -> newsArticles.firstOrNull { it.id == id } }
+    private fun savedNewsArticles(): List<NewsArticle> = savedArticles.values.toList()
 
     private fun watchlistNewsArticles(assets: List<MarketAsset>): List<NewsArticle> {
         val symbols = assets.flatMap { listOf(it.symbol, it.name) }
@@ -2405,6 +2438,7 @@ class MainActivity : AppCompatActivity() {
         }
 
     private fun renderWatchlistPicker() {
+        screenId = "watchlist-picker"
         setChildBack { renderWatchlist() }
         bottomNav.visibility = View.VISIBLE
         val screen = screenScroll()
@@ -2413,7 +2447,7 @@ class MainActivity : AppCompatActivity() {
         screen.addGap(12)
         if (marketAssets.isEmpty()) {
             screen.addView(loadingCard("Memuat daftar aset..."))
-            loadMarkets { renderWatchlistPicker() }
+            loadMarkets(done = redrawIfOn("watchlist-picker") { renderWatchlistPicker() })
         } else {
             marketAssets.forEach { asset ->
                 screen.addView(watchlistPickerItem(asset))
@@ -2450,23 +2484,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleWatchlist(asset: MarketAsset) {
         if (!watchlistSymbols.add(asset.symbol)) watchlistSymbols.remove(asset.symbol)
+        userStore.saveWatchlist(watchlistSymbols)
     }
 
-    private fun isSavedArticle(article: NewsArticle): Boolean = savedArticleIds.contains(article.id)
+    private fun isSavedArticle(article: NewsArticle): Boolean = savedArticles.containsKey(article.id)
 
     private fun toggleSavedArticle(article: NewsArticle) {
-        if (!savedArticleIds.add(article.id)) savedArticleIds.remove(article.id)
+        if (savedArticles.remove(article.id) == null) savedArticles[article.id] = article
+        userStore.saveArticles(savedArticles.values)
     }
-
-    private fun toolbarWithActions(title: String, first: String, second: String): LinearLayout =
-        LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, dp(12))
-            addView(text(title, 22f, R.color.marketedge_text_primary, Typeface.BOLD), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(iconButton("Edit", first).apply { setOnClickListener { performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY) } })
-            addView(iconButton("Tambah", second).apply { setOnClickListener { performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY) } }, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(8) })
-        }
 
     private fun compactAsset(asset: MarketAsset): View =
         LinearLayout(this).apply {
@@ -2478,6 +2504,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderMore() {
+        screenId = "more"
         syncBottomNav(R.id.nav_more)
         setTopLevelScreen(R.id.nav_more)
         val screen = screenScroll()
@@ -2493,7 +2520,7 @@ class MainActivity : AppCompatActivity() {
         screen.addView(sectionHeader("Monitor"))
         screen.addGap(2)
         screen.addView(menuRow("Peringatan", "Pantau harga, berita, dan volatilitas", "3 aktif") { renderMonitorDetail("Peringatan") })
-        screen.addView(menuRow("Item Tersimpan", "Berita dan aset yang kamu simpan", "${savedArticleIds.size} item") { renderMonitorDetail("Item Tersimpan") })
+        screen.addView(menuRow("Item Tersimpan", "Berita dan aset yang kamu simpan", "${savedArticles.size} item") { renderMonitorDetail("Item Tersimpan") })
         screen.addView(menuRow("Sentimen Saya", "Ringkasan mood market dari watchlist", marketSentimentLabel()) { renderMonitorDetail("Sentimen Saya") })
         screen.addView(menuRow("Versi Bebas Iklan", "Kelola pengalaman premium", "Pro") { renderMonitorDetail("Versi Bebas Iklan") })
         screen.addGap(16)
@@ -2511,7 +2538,7 @@ class MainActivity : AppCompatActivity() {
         screen.addView(sectionHeader("Live Market"))
         screen.addGap(8)
         if (marketAssets.isEmpty()) {
-            loadMarkets { renderMore() }
+            loadMarkets(done = redrawIfOn("more") { renderMore() })
             screen.addView(loadingCard("Memperbarui preview market..."))
         } else {
             marketAssets.take(2).forEach { screen.addView(compactAsset(it)) }
@@ -2668,6 +2695,7 @@ class MainActivity : AppCompatActivity() {
             renderAuth(AuthEntry.MORE)
             return
         }
+        screenId = "profile"
         val screen = moreChildScreen("Profil")
         screen.addView(profileHero())
         if (subscriptionTier != SubscriptionTier.PRO_HIGH) {
@@ -2707,6 +2735,7 @@ class MainActivity : AppCompatActivity() {
             currentUserName = null
             currentUserEmail = null
             subscriptionTier = SubscriptionTier.FREE
+            saveAccount()
             renderMore()
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)))
         displayScroll(screen)
@@ -2746,6 +2775,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderMonitorDetail(title: String) {
+        screenId = "monitor"
         val screen = moreChildScreen(title)
         when (title) {
             "Peringatan" -> renderAlertsContent(screen)
@@ -2774,8 +2804,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderSavedItemsContent(screen: LinearLayout) {
-        if (newsArticles.isEmpty()) loadNews { renderMonitorDetail("Item Tersimpan") }
-        val saved = newsArticles.filter { savedArticleIds.contains(it.id) }
+        val saved = savedNewsArticles()
         screen.addView(infoCard("Semua berita yang kamu bookmark akan muncul di sini untuk dibaca ulang atau ditanyakan ke WarrenAI."))
         screen.addGap(12)
         if (saved.isEmpty()) {
@@ -2789,7 +2818,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderSentimentContent(screen: LinearLayout) {
-        if (marketAssets.isEmpty()) loadMarkets { renderMonitorDetail("Sentimen Saya") }
+        if (marketAssets.isEmpty()) loadMarkets(done = redrawIfOn("monitor") { renderMonitorDetail("Sentimen Saya") })
         val strongest = marketAssets.maxByOrNull { it.changePercent }
         val weakest = marketAssets.minByOrNull { it.changePercent }
         screen.addView(card().apply {
@@ -2842,6 +2871,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderAboutApp() {
+        screenId = "about"
         val screen = moreChildScreen("About App")
         screen.addView(card().apply {
             orientation = LinearLayout.HORIZONTAL
@@ -2895,7 +2925,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun openDeveloperGithub() {
         val opened = runCatching {
-            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/rhmatzeka")))
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/rhmatzeka")))
         }.isSuccess
         if (!opened) {
             val message = "Browser belum tersedia untuk membuka GitHub."
@@ -2904,6 +2934,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderQuickDetail(label: String) {
+        screenId = "quick"
         val screen = moreChildScreen(label)
         when (label) {
             "Kalender" -> {
@@ -3005,6 +3036,7 @@ class MainActivity : AppCompatActivity() {
         if (subscriptionTier == SubscriptionTier.FREE) "Belum berlangganan" else "${subscriptionTier.label} aktif"
 
     private fun renderAuth(from: AuthEntry = AuthEntry.MORE, register: Boolean = false) {
+        screenId = "auth"
         bottomNav.visibility = View.GONE
         setChildBack { returnFromAuth(from) }
         val screen = screenScroll()
@@ -3046,6 +3078,7 @@ class MainActivity : AppCompatActivity() {
                     else -> {
                         currentUserName = if (register) name else email.substringBefore("@").replaceFirstChar { it.uppercaseChar() }
                         currentUserEmail = email
+                        saveAccount()
                         if ((from == AuthEntry.NEWS && !hasNewsAccess()) || (from == AuthEntry.AI && !hasAiAccess())) {
                             renderSubscription(from)
                         } else {
@@ -3077,6 +3110,7 @@ class MainActivity : AppCompatActivity() {
             renderAuth(from)
             return
         }
+        screenId = "subscription"
         bottomNav.visibility = View.GONE
         setChildBack { returnFromAuth(from) }
         val screen = screenScroll()
@@ -3151,6 +3185,7 @@ class MainActivity : AppCompatActivity() {
         addGap(8)
         addView(actionButton(if (subscriptionTier == tier) "${tier.label} Aktif" else "Pilih ${tier.label}") {
             subscriptionTier = tier
+            saveAccount()
             when {
                 source == AuthEntry.NEWS -> renderNews()
                 source == AuthEntry.AI && tier == SubscriptionTier.PRO_HIGH -> renderIdeas()
@@ -3207,6 +3242,7 @@ class MainActivity : AppCompatActivity() {
             if (isLoggedIn()) renderSubscription(AuthEntry.AI) else renderAuth(AuthEntry.AI)
             return
         }
+        screenId = "aichat"
         activeAiSurface = AiSurface.FULLSCREEN
         setChildBack { renderMore() }
         bottomNav.visibility = View.GONE
@@ -3287,6 +3323,7 @@ class MainActivity : AppCompatActivity() {
         }
 
     private fun renderSearch(onBack: () -> Unit = { renderMarket() }) {
+        screenId = "search"
         bottomNav.visibility = View.GONE
         setChildBack {
             bottomNav.visibility = View.VISIBLE
@@ -3342,8 +3379,8 @@ class MainActivity : AppCompatActivity() {
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
-        if (marketAssets.isEmpty()) loadMarkets { refreshResults(input.text.toString()) }
-        if (newsArticles.isEmpty()) loadNews { refreshResults(input.text.toString()) }
+        if (marketAssets.isEmpty()) loadMarkets(done = redrawIfOn("search") { refreshResults(input.text.toString()) })
+        if (newsArticles.isEmpty()) loadNews(done = redrawIfOn("search") { refreshResults(input.text.toString()) })
         refreshResults("")
         displayScroll(screen)
         input.requestFocus()
@@ -3429,7 +3466,7 @@ class MainActivity : AppCompatActivity() {
         marketError = null
         executor.execute {
             val result = runCatching { repository.marketAssets() }
-            runOnUiThread {
+            onUi {
                 result.onSuccess { marketAssets = it }
                     .onFailure { marketError = it.message ?: it.javaClass.simpleName }
                 marketLoading = false
@@ -3444,7 +3481,7 @@ class MainActivity : AppCompatActivity() {
         newsError = null
         executor.execute {
             val result = runCatching { repository.topNews() }
-            runOnUiThread {
+            onUi {
                 result.onSuccess {
                     newsArticles = it
                     NewsNotificationController.recordLatestFromArticles(this, it)
@@ -3463,13 +3500,15 @@ class MainActivity : AppCompatActivity() {
         renderActiveAiSurface()
         executor.execute {
             val answer = runCatching { answerWithConfiguredAi(query) }
-            runOnUiThread {
+            onUi {
                 chatMessages.removeLastOrNull()
                 chatMessages.add(answer.getOrElse {
                     localAiAnswer(query, friendlyAiError(it.message.orEmpty()))
                 })
-                if (activeAiSurface == AiSurface.PAGE) pendingIdeasChatScroll = true
-                renderActiveAiSurface()
+                if (screenId == "ideas" || screenId == "aichat") {
+                    if (activeAiSurface == AiSurface.PAGE) pendingIdeasChatScroll = true
+                    renderActiveAiSurface()
+                }
             }
         }
     }
