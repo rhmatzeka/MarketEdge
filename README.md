@@ -2,6 +2,12 @@
 
 An Android app for following markets and financial news, in the style of Investing.com. It shows live crypto, forex, and gold prices, detailed charts, the latest headlines, your watchlist, and **WarrenAI**, a chat assistant that answers questions using the market data and news the app just loaded.
 
+## Download
+
+[**Download the latest APK**](https://github.com/rhmatzeka/MarketEdge/releases/latest/download/MarketEdge.apk) (Android 7.0 or newer).
+
+Open the file on your phone and allow "Install unknown apps" if Android asks. Every push to `main` builds a new signed APK and publishes it to the [`apk-terbaru` release](https://github.com/rhmatzeka/MarketEdge/releases/tag/apk-terbaru), so installing a newer download updates the app in place.
+
 ## Features
 
 - **Markets**: a compact, fast price list (the tab labels are in Indonesian: Pasar, Berita, Ide, Watchlist, Lainnya)

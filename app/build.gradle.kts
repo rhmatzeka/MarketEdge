@@ -20,6 +20,12 @@ fun String.asBuildConfigString(): String =
 
 val dotEnv = readDotEnv()
 
+// CI sets MARKETEDGE_BUILD to the workflow run number so every published APK
+// is a newer version than the last one and installs as an update.
+val buildNumber = (System.getenv("MARKETEDGE_BUILD") ?: "").toIntOrNull() ?: 1
+val releaseKeystore = rootProject.file("marketedge.p12")
+val releaseKeystorePassword = System.getenv("MARKETEDGE_KEYSTORE_PASSWORD") ?: ""
+
 android {
     namespace = "id.rahmat.marketedge"
     compileSdk {
@@ -32,13 +38,23 @@ android {
         applicationId = "id.rahmat.marketedge"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = buildNumber
+        versionName = "1.0.$buildNumber"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "AI_API_KEY", (dotEnv["AI_API_KEY"] ?: "").asBuildConfigString())
         buildConfigField("String", "AI_BASE_URL", (dotEnv["AI_BASE_URL"] ?: "https://api.groq.com/openai/v1/chat/completions").asBuildConfigString())
         buildConfigField("String", "AI_MODEL", (dotEnv["AI_MODEL"] ?: "llama-3.1-8b-instant").asBuildConfigString())
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = releaseKeystore
+            storeType = "pkcs12"
+            storePassword = releaseKeystorePassword
+            keyAlias = "marketedge"
+            keyPassword = releaseKeystorePassword
+        }
     }
 
     buildFeatures {
@@ -47,6 +63,10 @@ android {
 
     buildTypes {
         release {
+            // Without the key (e.g. a local build) the release APK is left unsigned.
+            if (releaseKeystore.exists() && releaseKeystorePassword.isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
