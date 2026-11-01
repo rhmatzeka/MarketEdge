@@ -34,6 +34,19 @@ class FeedParsingTest {
     }
 
     @Test
+    fun parsesAntaraRssWithMediaImages() {
+        val articles = MarketNewsClient().parse(resource("antara_bursa_rss.xml"), MarketNewsClient.ANTARA)
+
+        assertEquals(2, articles.size)
+        val first = articles.first()
+        assertEquals("BEI apresiasi dukungan Chapman Taylor soal Bursa RI di emerging market", first.title)
+        assertEquals(MarketNewsClient.ANTARA, first.source)
+        assertTrue(first.imageUrl!!.startsWith("https://img.antaranews.com/"))
+        assertTrue(first.summary.startsWith("Direktur Utama PT Bursa Efek Indonesia"))
+        assertEquals("Saham", first.category)
+    }
+
+    @Test
     fun parsesYahooSpark() {
         val assets = YahooFinanceClient().parseSpark(resource("yahoo_spark.json"))
 

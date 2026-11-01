@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:sy="http://purl.org/rss/1.0/modules/syndication/" xmlns:slash="http://purl.org/rss/1.0/modules/slash/" xmlns:media="http://search.yahoo.com/mrss/" version="2.0">
+  <channel>
+    <title>Bursa - ANTARA News</title>
+    <description>Berita Terkini dan Terpercaya Indonesia</description>
+    <link>https://www.antaranews.com</link>
+    <language>id</language>
+    <copyright>Copyright 2026, ANTARA News</copyright>
+    <category>Ekonomi</category>
+    <lastBuildDate>Sun, 01 Nov 2026 10:04:04 +0700</lastBuildDate>
+    <atom:link href="https://www.antaranews.com/rss/ekonomi-bursa.xml" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>BEI apresiasi dukungan Chapman Taylor soal Bursa RI di emerging market</title>
+      <link>https://www.antaranews.com/berita/5824451/bei-apresiasi-dukungan-chapman-taylor-soal-bursa-ri-di-emerging-market</link>
+      <pubDate>Sun, 01 Nov 2026 09:19:44 +0700</pubDate>
+      <description><![CDATA[<img src="https://img.antaranews.com/cache/800x533/2026/11/01/1000833108.jpg" align="left" border="0" />Direktur Utama PT Bursa Efek Indonesia (BEI), Jeffrey Hendrik mengapresiasi pernyataan dan dukungan investor senior ...]]></description>
+      <content:encoded><![CDATA[Direktur Utama PT Bursa Efek Indonesia (BEI), Jeffrey Hendrik mengapresiasi pernyataan dan dukungan investor senior ...]]></content:encoded>
+      <guid>https://www.antaranews.com/berita/5824451/bei-apresiasi-dukungan-chapman-taylor-soal-bursa-ri-di-emerging-market</guid>
+      <media:content url="https://img.antaranews.com/cache/800x533/2026/11/01/1000833108.jpg" medium="image">
+        <media:title>BEI apresiasi dukungan Chapman Taylor soal Bursa RI di emerging market</media:title>
+        <media:description>Direktur Utama PT Bursa Efek Indonesia (BEI), Jeffrey Hendrik (dua kanan) bersama jajaran direksi Self-Regulatory Organization (SRO) dalam Media Gathering di Kabupaten Lombok Tengah, Nusa Tenggara Barat (NTB), Sabtu (31/10/2026). (Antara/ Muhammad Heriyanto)</media:description>
+      </media:content>
+      <enclosure length="0" type="image/jpeg" url="https://img.antaranews.com/cache/800x533/2026/11/01/1000833108.jpg"/>
+    </item>
+<item>
+      <title>BEI: Hanya Indonesia-India buka data pemegang saham di atas 1 persen</title>
+      <link>https://www.antaranews.com/berita/5824195/bei-hanya-indonesia-india-buka-data-pemegang-saham-di-atas-1-persen</link>
+      <pubDate>Sat, 31 Oct 2026 23:32:52 +0700</pubDate>
+      <description><![CDATA[<img src="https://img.antaranews.com/cache/800x533/2026/10/31/1001648486.jpg" align="left" border="0" />PT Bursa Efek Indonesia (BEI) menyebutkan Indonesia dan India menjadi dua negara di dunia yang membuka informasi ...]]></description>
+      <content:encoded><![CDATA[PT Bursa Efek Indonesia (BEI) menyebutkan Indonesia dan India menjadi dua negara di dunia yang membuka informasi ...]]></content:encoded>
+      <guid>https://www.antaranews.com/berita/5824195/bei-hanya-indonesia-india-buka-data-pemegang-saham-di-atas-1-persen</guid>
+      <media:content url="https://img.antaranews.com/cache/800x533/2026/10/31/1001648486.jpg" medium="image">
+        <media:title>BEI: Hanya Indonesia-India buka data pemegang saham di atas 1 persen</media:title>
+        <media:description>Direktur Utama Bursa Efek Indonesia (BEI) Jeffery Hendrik memaparkan kondisi pasar modal Indonesia dalam sesi wawancara cegat usai lokakarya bertajuk Transformasi Berkelanjutan untuk Pasar Modal Terpercaya dan Tangguh di Mandalika, Kabupaten Lombok Tengah, Nusa Tenggara Barat, Sabtu (31/10/2026). ANTARA/Sugiharto Purnama</media:description>
+      </media:content>
+      <enclosure length="0" type="image/jpeg" url="https://img.antaranews.com/cache/800x533/2026/10/31/1001648486.jpg"/>
+    </item>
+</channel>
+</rss>

@@ -33,6 +33,7 @@ import android.widget.Space
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -154,9 +155,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        window.statusBarColor = Color.TRANSPARENT
-        window.navigationBarColor = getColor(R.color.marketedge_surface)
+        // The app is always dark, so ask for light status/navigation bar icons even when
+        // the phone is in light mode (they were dark-on-dark and nearly invisible).
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(getColor(R.color.marketedge_surface))
+        )
         setupHardwareBack()
         restoreUserState()
         loadVoiceAccessibilityChoice()
@@ -3321,7 +3325,7 @@ class MainActivity : AppCompatActivity() {
             val result = runCatching { repository.marketAssets() }
             onUi {
                 result.onSuccess { marketAssets = it }
-                    .onFailure { marketError = it.message ?: it.javaClass.simpleName }
+                    .onFailure { marketError = friendlyLoadError(it) }
                 marketLoading = false
                 done()
             }
@@ -3339,10 +3343,22 @@ class MainActivity : AppCompatActivity() {
                     newsArticles = it
                     NewsNotificationController.recordLatestFromArticles(this, it)
                 }
-                    .onFailure { newsError = it.message ?: it.javaClass.simpleName }
+                    .onFailure { newsError = friendlyLoadError(it) }
                 newsLoading = false
                 done()
             }
+        }
+    }
+
+    /** A short message for the user instead of a raw exception or server response. */
+    private fun friendlyLoadError(error: Throwable): String {
+        val message = error.message.orEmpty()
+        return when {
+            error is java.net.UnknownHostException || error is java.net.ConnectException ||
+                error is java.net.SocketTimeoutException -> "Koneksi internet bermasalah. Periksa jaringan lalu coba lagi."
+            message.startsWith("HTTP 429") -> "Sumber data sedang membatasi permintaan. Coba lagi sebentar lagi."
+            message.startsWith("HTTP ") -> "Sumber data sedang menolak atau bermasalah (${message.take(8)}). Coba lagi beberapa saat lagi."
+            else -> "Data belum bisa dimuat. Coba lagi beberapa saat lagi."
         }
     }
 
