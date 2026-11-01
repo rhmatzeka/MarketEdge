@@ -16,3 +16,8 @@
 local.properties
 .env
 .git-push
+.env.*
+!.env.example
+*.p12
+*.keystore
+*.jks

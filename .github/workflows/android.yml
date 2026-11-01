@@ -1,0 +1,59 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+  # PRs build the APK too (without publishing) so Gradle breakage is caught
+  # before it reaches main.
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      MARKETEDGE_BUILD: ${{ github.run_number }}
+      MARKETEDGE_KEYSTORE_PASSWORD: ${{ secrets.MARKETEDGE_KEYSTORE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Restore release key
+        if: github.event_name != 'pull_request'
+        env:
+          KEYSTORE_B64: ${{ secrets.MARKETEDGE_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$MARKETEDGE_KEYSTORE_PASSWORD" ]; then
+            echo "::error::Secrets MARKETEDGE_KEYSTORE_B64 / MARKETEDGE_KEYSTORE_PASSWORD are not set"; exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > marketedge.p12
+      - run: chmod +x gradlew && ./gradlew :app:assembleRelease --no-daemon
+      - name: Check the APK is signed
+        if: github.event_name != 'pull_request'
+        run: |
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -f "$APK" || { echo "::error::Signed APK not found"; ls -R app/build/outputs/apk; exit 1; }
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          "$APKSIGNER" verify --print-certs "$APK" | head -3
+      - name: Publish to the apk-terbaru release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk MarketEdge.apk
+          gh release view apk-terbaru >/dev/null 2>&1 || gh release create apk-terbaru \
+            --title "MarketEdge APK terbaru" \
+            --notes "APK Android terbaru, dibangun otomatis dari branch main. Unduh: https://github.com/${{ github.repository }}/releases/latest/download/MarketEdge.apk" \
+            --latest
+          printf '{"build": %s, "versi": "1.0.%s"}\n' "${{ github.run_number }}" "${{ github.run_number }}" > versi.json
+          gh release upload apk-terbaru MarketEdge.apk versi.json --clobber
