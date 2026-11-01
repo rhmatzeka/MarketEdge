@@ -52,7 +52,8 @@ class PublicApiClient {
                 dayRange = "${formatUsd(low)} - ${formatUsd(high)}",
                 yearRange = "${formatUsd(item.optDouble("atl", 0.0))} - ${formatUsd(item.optDouble("ath", 0.0))}",
                 previousClose = formatUsd(price - priceChange),
-                open = formatUsd(low)
+                // The markets endpoint has no open price; the price 24h ago is the closest.
+                open = formatUsd(price - priceChange)
             )
         }
     }
@@ -60,11 +61,10 @@ class PublicApiClient {
     fun fetchCurrencyAndCommodityMarkets(): List<MarketAsset> {
         val current = JSONObject(request("https://latest.currency-api.pages.dev/v1/currencies/usd.json"))
         val date = current.optString("date")
-        val previousDate = previousDate(date)
         val currentRates = current.getJSONObject("usd")
-        val previousRates = runCatching {
-            JSONObject(request("https://$previousDate.currency-api.pages.dev/v1/currencies/usd.json")).getJSONObject("usd")
-        }.getOrNull()
+        // One download per day, shared by every currency (this used to be 7 downloads per currency).
+        val history = ratesHistory(date, currentRates, 7)
+        val previousRates = history.getOrNull(history.size - 2)
         val specs = listOf(
             CurrencySpec("USD/IDR", "USD/IDR", "idr", false, "Mata Uang"),
             CurrencySpec("EUR/USD", "Euro", "eur", true, "Mata Uang"),
@@ -91,7 +91,10 @@ class PublicApiClient {
             }
             val change = currentPrice - previousPrice
             val changePercent = if (previousPrice == 0.0) 0.0 else (change / previousPrice) * 100.0
-            val history = fetchCurrencyHistory(spec.code, spec.invert, currentPrice)
+            val sparkline = history.map { rates ->
+                val rate = rates?.optDouble(spec.code, Double.NaN) ?: Double.NaN
+                (if (rate.isNaN() || rate == 0.0) currentPrice else if (spec.invert) 1.0 / rate else rate).toFloat()
+            }
             val formatter = formatterFor(spec)
             MarketAsset(
                 name = spec.name,
@@ -99,8 +102,8 @@ class PublicApiClient {
                 price = formatter(currentPrice),
                 changeValue = formatSignedNumber(change, spec),
                 changePercent = changePercent,
-                updatedAt = "$date",
-                sparkline = history,
+                updatedAt = date,
+                sparkline = sparkline,
                 category = spec.category,
                 source = "FX Feed",
                 unit = spec.symbol,
@@ -153,7 +156,11 @@ class PublicApiClient {
         val code = asset.chartId ?: return asset.sparkline
         val invert = asset.category == "Komoditas" ||
             asset.symbol in setOf("EUR/USD", "GBP/USD", "AUD/USD", "XAU/USD", "XAG/USD")
-        return fetchCurrencyHistory(code, invert, asset.sparkline.lastOrNull()?.toDouble() ?: 1.0)
+        val fallback = asset.sparkline.lastOrNull()?.toDouble() ?: 1.0
+        return ratesHistory(null, null, 7).map { rates ->
+            val rate = rates?.optDouble(code, Double.NaN) ?: Double.NaN
+            (if (rate.isNaN() || rate == 0.0) fallback else if (invert) 1.0 / rate else rate).toFloat()
+        }
     }
 
     fun fetchMarketDetailStats(asset: MarketAsset): MarketDetailStats {
@@ -237,8 +244,8 @@ class PublicApiClient {
         return try {
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val body = BufferedReader(InputStreamReader(stream)).use { it.readText() }
-            if (code !in 200..299) error("HTTP $code: $body")
+            val body = stream?.let { BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader -> reader.readText() } }.orEmpty()
+            if (code !in 200..299) error("HTTP $code: ${body.take(200)}")
             body
         } finally {
             connection.disconnect()
@@ -279,18 +286,22 @@ class PublicApiClient {
         return points.takeLast(120)
     }
 
-    private fun fetchCurrencyHistory(code: String, invert: Boolean, fallback: Double): List<Float> {
-        val dates = lastDates(7)
-        val values = mutableListOf<Float>()
-        dates.forEach { date ->
-            val value = runCatching {
-                val rates = JSONObject(request("https://$date.currency-api.pages.dev/v1/currencies/usd.json")).getJSONObject("usd")
-                val rate = rates.optDouble(code, Double.NaN)
-                if (rate.isNaN()) fallback else if (invert) 1.0 / rate else rate
-            }.getOrDefault(fallback)
-            values.add(value.toFloat())
+    /**
+     * Daily USD rate tables for the [count] days ending at [endDate] (oldest first).
+     * [endRates] is reused for the last day when it was already downloaded; a day
+     * that fails to load is null.
+     */
+    private fun ratesHistory(endDate: String?, endRates: JSONObject?, count: Int): List<JSONObject?> {
+        val dates = lastDates(count, endDate)
+        return dates.mapIndexed { index, date ->
+            if (index == dates.lastIndex && endRates != null) {
+                endRates
+            } else {
+                runCatching {
+                    JSONObject(request("https://$date.currency-api.pages.dev/v1/currencies/usd.json")).getJSONObject("usd")
+                }.getOrNull()
+            }
         }
-        return values
     }
 
     private fun formatUsd(value: Double): String {
@@ -413,17 +424,11 @@ class PublicApiClient {
         return colors[abs(seed.hashCode()) % colors.size]
     }
 
-    private fun previousDate(date: String): String {
-        val formatter = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        val calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
-        calendar.time = formatter.parse(date) ?: Date()
-        calendar.add(Calendar.DAY_OF_YEAR, -1)
-        return formatter.format(calendar.time)
-    }
-
-    private fun lastDates(count: Int): List<String> {
-        val formatter = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        val calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+    private fun lastDates(count: Int, endDate: String? = null): List<String> {
+        val utc = TimeZone.getTimeZone("UTC")
+        val formatter = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = utc }
+        val calendar = Calendar.getInstance(utc)
+        endDate?.let { runCatching { formatter.parse(it) }.getOrNull() }?.let { calendar.time = it }
         val dates = mutableListOf<String>()
         repeat(count) {
             dates.add(formatter.format(calendar.time))
