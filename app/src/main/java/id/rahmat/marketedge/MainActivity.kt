@@ -33,6 +33,7 @@ import android.widget.Space
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -154,9 +155,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        window.statusBarColor = Color.TRANSPARENT
-        window.navigationBarColor = getColor(R.color.marketedge_surface)
+        // The app is always dark, so ask for light status/navigation bar icons even when
+        // the phone is in light mode (they were dark-on-dark and nearly invisible).
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(getColor(R.color.marketedge_surface))
+        )
         setupHardwareBack()
         restoreUserState()
         loadVoiceAccessibilityChoice()
