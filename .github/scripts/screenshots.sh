@@ -99,13 +99,21 @@ wait_text "~headline aktif" 60
 sleep 6
 shot 4-berita
 
-tap_text "~CNBC Indonesia •"
+tap_text "~yang lalu"
 wait_text "Artikel Lengkap"
 sleep 8
 shot 5-artikel
 
 tap_text "AI" last
 wait_text "Aset Pilihan AI"
+sleep 4
+# The suggestion chips sit below the fold: scroll until they show up.
+for _ in 1 2 3 4 5; do
+  dump
+  [ -n "$(center "Ringkas market hari ini")" ] && break
+  adb shell input swipe 540 1700 540 700 400
+  sleep 1
+done
 tap_text "Ringkas market hari ini" first 6
 shot 6-warrenai
 

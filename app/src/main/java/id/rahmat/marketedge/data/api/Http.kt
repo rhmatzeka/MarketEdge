@@ -22,7 +22,7 @@ internal object Http {
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (code !in 200..299) error("HTTP $code: ${body.take(200)}")
+            if (code !in 200..299) error("HTTP $code")
             body
         } finally {
             connection.disconnect()

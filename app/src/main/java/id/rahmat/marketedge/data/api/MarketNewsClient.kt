@@ -8,16 +8,34 @@ import java.io.StringReader
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CompletableFuture
 
-/** Market headlines from the CNBC Indonesia market RSS feed (Indonesian, with images). */
+/**
+ * Indonesian market headlines (with images) from the CNBC Indonesia and ANTARA RSS
+ * feeds, merged newest first. One feed refusing the request (CNBC blocks some
+ * networks) still leaves the other.
+ */
 class MarketNewsClient {
     fun fetchLatest(limit: Int = 40): List<NewsArticle> {
-        val xml = Http.get(FEED_URL, accept = "application/rss+xml, application/xml, text/xml")
-        return parse(xml, limit)
+        val results = FEEDS.map { (source, url) ->
+            CompletableFuture.supplyAsync {
+                runCatching { parseFeed(Http.get(url, accept = "application/rss+xml, application/xml, text/xml"), source) }
+            }
+        }.map { it.join() }
+        val items = results.flatMap { it.getOrDefault(emptyList()) }
+        if (items.isEmpty()) {
+            throw results.firstNotNullOfOrNull { it.exceptionOrNull() } ?: IllegalStateException("Berita kosong")
+        }
+        return items.sortedByDescending { it.published?.time ?: 0L }.take(limit).map { it.article }
     }
 
-    internal fun parse(xml: String, limit: Int = 40): List<NewsArticle> =
-        parseItems(xml).take(limit).mapNotNull { it.toArticle() }
+    internal fun parse(xml: String, source: String = SOURCE, limit: Int = 40): List<NewsArticle> =
+        parseFeed(xml, source).take(limit).map { it.article }
+
+    private class Item(val article: NewsArticle, val published: Date?)
+
+    private fun parseFeed(xml: String, source: String): List<Item> =
+        parseItems(xml).mapNotNull { it.toItem(source) }
 
     private fun parseItems(xml: String): List<Map<String, String>> {
         val parser = Xml.newPullParser().apply {
@@ -46,7 +64,7 @@ class MarketNewsClient {
         return items
     }
 
-    private fun Map<String, String>.toArticle(): NewsArticle? {
+    private fun Map<String, String>.toItem(source: String): Item? {
         val title = this["title"].orEmpty().trim()
         val link = (this["link"] ?: this["guid"]).orEmpty().trim()
         if (title.isBlank() || link.isBlank()) return null
@@ -56,11 +74,12 @@ class MarketNewsClient {
             .replace(Regex("\\s+"), " ")
             .trim()
         val image = this["image"] ?: Regex("<img[^>]+src=\"([^\"]+)\"").find(description)?.groupValues?.get(1)
-        return NewsArticle(
+        val published = parseDate(this["pubDate"])
+        return Item(NewsArticle(
             id = link,
             title = title,
-            source = SOURCE,
-            timeAgo = relativeTime(parseDate(this["pubDate"])),
+            source = source,
+            timeAgo = relativeTime(published),
             category = categoryFor(title, summary),
             summary = summary,
             content = summary,
@@ -68,7 +87,7 @@ class MarketNewsClient {
             tags = emptyList(),
             sourceUrl = link,
             imageUrl = image?.replace("&amp;", "&")
-        )
+        ), published)
     }
 
     private fun parseDate(value: String?): Date? = value?.let {
@@ -77,7 +96,11 @@ class MarketNewsClient {
 
     companion object {
         const val SOURCE = "CNBC Indonesia"
-        private const val FEED_URL = "https://www.cnbcindonesia.com/market/rss"
+        const val ANTARA = "ANTARA"
+        private val FEEDS = listOf(
+            SOURCE to "https://www.cnbcindonesia.com/market/rss",
+            ANTARA to "https://www.antaranews.com/rss/ekonomi-bursa.xml"
+        )
 
         val CATEGORIES = listOf("Saham", "Kripto", "Forex & Emas", "Komoditas", "Global", "Ekonomi")
 

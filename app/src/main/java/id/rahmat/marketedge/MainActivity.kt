@@ -3321,7 +3321,7 @@ class MainActivity : AppCompatActivity() {
             val result = runCatching { repository.marketAssets() }
             onUi {
                 result.onSuccess { marketAssets = it }
-                    .onFailure { marketError = it.message ?: it.javaClass.simpleName }
+                    .onFailure { marketError = friendlyLoadError(it) }
                 marketLoading = false
                 done()
             }
@@ -3339,10 +3339,22 @@ class MainActivity : AppCompatActivity() {
                     newsArticles = it
                     NewsNotificationController.recordLatestFromArticles(this, it)
                 }
-                    .onFailure { newsError = it.message ?: it.javaClass.simpleName }
+                    .onFailure { newsError = friendlyLoadError(it) }
                 newsLoading = false
                 done()
             }
+        }
+    }
+
+    /** A short message for the user instead of a raw exception or server response. */
+    private fun friendlyLoadError(error: Throwable): String {
+        val message = error.message.orEmpty()
+        return when {
+            error is java.net.UnknownHostException || error is java.net.ConnectException ||
+                error is java.net.SocketTimeoutException -> "Koneksi internet bermasalah. Periksa jaringan lalu coba lagi."
+            message.startsWith("HTTP 429") -> "Sumber data sedang membatasi permintaan. Coba lagi sebentar lagi."
+            message.startsWith("HTTP ") -> "Sumber data sedang menolak atau bermasalah (${message.take(8)}). Coba lagi beberapa saat lagi."
+            else -> "Data belum bisa dimuat. Coba lagi beberapa saat lagi."
         }
     }
 

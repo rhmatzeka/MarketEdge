@@ -151,7 +151,7 @@ class YahooFinanceClient {
             Spec(ticker, symbol, name, "Komoditas", "$symbol/USD", "$")
 
         private val SPECS = listOf(
-            index("^JKSE", "IHSG", "IHSG (IDX Composite)", "IDX • IDR"),
+            index("^JKSE", "IHSG", "IDX Composite", "IDX • IDR"),
             index("^GSPC", "SPX", "S&P 500", "S&P • USD"),
             index("^IXIC", "IXIC", "Nasdaq Composite", "NASDAQ • USD"),
             index("^DJI", "DJI", "Dow Jones", "DJ • USD"),
