@@ -37,7 +37,13 @@ jobs:
             echo "::error::Secrets MARKETEDGE_KEYSTORE_B64 / MARKETEDGE_KEYSTORE_PASSWORD are not set"; exit 1
           fi
           echo "$KEYSTORE_B64" | base64 -d > marketedge.p12
-      - run: chmod +x gradlew && ./gradlew :app:assembleRelease --no-daemon
+      - run: chmod +x gradlew && ./gradlew :app:testDebugUnitTest :app:assembleRelease --no-daemon
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: app/build/reports/tests/
       - name: Check the APK is signed
         if: github.event_name != 'pull_request'
         run: |

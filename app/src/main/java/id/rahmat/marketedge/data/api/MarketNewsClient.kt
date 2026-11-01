@@ -13,8 +13,11 @@ import java.util.Locale
 class MarketNewsClient {
     fun fetchLatest(limit: Int = 40): List<NewsArticle> {
         val xml = Http.get(FEED_URL, accept = "application/rss+xml, application/xml, text/xml")
-        return parseItems(xml).take(limit).mapNotNull { it.toArticle() }
+        return parse(xml, limit)
     }
+
+    internal fun parse(xml: String, limit: Int = 40): List<NewsArticle> =
+        parseItems(xml).take(limit).mapNotNull { it.toArticle() }
 
     private fun parseItems(xml: String): List<Map<String, String>> {
         val parser = Xml.newPullParser().apply {

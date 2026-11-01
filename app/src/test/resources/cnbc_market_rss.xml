@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:media="http://search.yahoo.com/mrss/">
+	<channel>
+		<lastBuildDate>Sun, 01 Nov 2026 10:03:40 +0700</lastBuildDate>
+		<title>Market - Berita Terkini Market, Saham, Reksadana - CNBC Indonesia</title>
+		<description>CNBC Indonesia menyajikan berita terkini seputar market, pasar modal, saham, reksa dana, valas, komoditas, dan rekomendasi saham.</description>
+		<atom:link href="https://www.cnbcindonesia.com/market" rel="self" type="application/rss+xml"/>
+		<link>https://www.cnbcindonesia.com/market</link>
+		<image>
+			<title>Market - Berita Terkini Market, Saham, Reksadana - CNBC Indonesia</title>
+			<link>https://www.cnbcindonesia.com/market</link>
+			<url>https://cdn.cnbcindonesia.com/cnbc/images/logo/2026/cnbc-logo.png</url>
+		</image>
+		<item>
+			<guid>https://www.cnbcindonesia.com/market/20261101072720-17-781218/pakai-info-rahasia-militer-tentara-cuan-rp72-miliar-di-pasar-taruhan</guid>
+			<pubDate>Sun, 01 Nov 2026 07:40:00 +0700</pubDate>
+			<title><![CDATA[Pakai Info Rahasia Militer, Tentara Cuan Rp7,2 Miliar di Pasar Taruhan]]></title>
+			<description><![CDATA[ <img src="https://awsimages.detik.net.id/visual/2026/01/03/usa-caribbeanmilitary-buildup-1767425740531_169.jpeg?w=1200&amp;q=90"/> Seorang anggota militer AS didakwa insider trading dengan memanfaatkan informasi rahasia operasi militer terkait Nicolás Maduro untuk keuntungan pribadi.]]></description>
+			<enclosure length="25000" type="image/jpeg" url="https://awsimages.detik.net.id/visual/2026/01/03/usa-caribbeanmilitary-buildup-1767425740531_169.jpeg?w=1200&amp;q=90"/>
+			<content:encoded><![CDATA[Seorang anggota militer AS didakwa insider trading dengan memanfaatkan informasi rahasia operasi militer terkait Nicolás Maduro untuk keuntungan pribadi.]]></content:encoded>
+			<link>https://www.cnbcindonesia.com/market/20261101072720-17-781218/pakai-info-rahasia-militer-tentara-cuan-rp72-miliar-di-pasar-taruhan</link>
+		</item>
+<item>
+			<guid>https://www.cnbcindonesia.com/market/20261031170345-17-781157/skandal-manipulasi-saham-bikin-geger-ribuan-investor-jadi-korban</guid>
+			<pubDate>Sat, 31 Oct 2026 20:15:47 +0700</pubDate>
+			<title><![CDATA[Skandal Manipulasi Saham Bikin Geger, Ribuan Investor Jadi Korban]]></title>
+			<description><![CDATA[ <img src="https://awsimages.detik.net.id/visual/2023/01/25/ihsg_169.jpeg?w=1200&amp;q=90"/> Skandal manipulasi pasar saham di Turki mengguncang 455.000 investor. Otoritas menangkap lebih dari 45 orang, termasuk politikus senior, di tengah penyelidikan.]]></description>
+			<enclosure length="25000" type="image/jpeg" url="https://awsimages.detik.net.id/visual/2023/01/25/ihsg_169.jpeg?w=1200&amp;q=90"/>
+			<content:encoded><![CDATA[Skandal manipulasi pasar saham di Turki mengguncang 455.000 investor. Otoritas menangkap lebih dari 45 orang, termasuk politikus senior, di tengah penyelidikan.]]></content:encoded>
+			<link>https://www.cnbcindonesia.com/market/20261031170345-17-781157/skandal-manipulasi-saham-bikin-geger-ribuan-investor-jadi-korban</link>
+		</item>
+<item>
+			<guid>https://www.cnbcindonesia.com/market/20261031153618-17-781149/ciri-ciri-orang-kelas-menengah-atas-anda-termasuk</guid>
+			<pubDate>Sat, 31 Oct 2026 19:45:18 +0700</pubDate>
+			<title><![CDATA[Ciri-Ciri Orang Kelas Menengah Atas, Anda Termasuk?]]></title>
+			<description><![CDATA[ <img src="https://awsimages.detik.net.id/visual/2023/04/28/ilustrasi-1_169.jpeg?w=1200&amp;q=90"/> Artikel ini membahas ciri-ciri kelas menengah atas di Indonesia, termasuk kemampuan finansial, kepemilikan aset, dan peluang pensiun dini. Temukan lebih lanjut!]]></description>
+			<enclosure length="25000" type="image/jpeg" url="https://awsimages.detik.net.id/visual/2023/04/28/ilustrasi-1_169.jpeg?w=1200&amp;q=90"/>
+			<content:encoded><![CDATA[Artikel ini membahas ciri-ciri kelas menengah atas di Indonesia, termasuk kemampuan finansial, kepemilikan aset, dan peluang pensiun dini. Temukan lebih lanjut!]]></content:encoded>
+			<link>https://www.cnbcindonesia.com/market/20261031153618-17-781149/ciri-ciri-orang-kelas-menengah-atas-anda-termasuk</link>
+		</item>
+</channel>
+</rss>

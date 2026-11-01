@@ -64,8 +64,13 @@ class YahooFinanceClient {
 
     private fun fetchSpark(chunk: List<Spec>): List<MarketAsset> {
         val symbols = chunk.joinToString(",") { URLEncoder.encode(it.ticker, "UTF-8") }
-        val json = JSONObject(Http.get("$BASE/spark?symbols=$symbols&range=1d&interval=15m"))
-        return chunk.mapNotNull { spec ->
+        return parseSpark(Http.get("$BASE/spark?symbols=$symbols&range=1d&interval=15m"))
+    }
+
+    /** Turns a spark response (an object keyed by ticker) into assets, in [SPECS] order. */
+    internal fun parseSpark(body: String): List<MarketAsset> {
+        val json = JSONObject(body)
+        return SPECS.mapNotNull { spec ->
             val item = json.optJSONObject(spec.ticker) ?: return@mapNotNull null
             val values = item.optJSONArray("close")?.doubles().orEmpty()
             val last = values.lastOrNull() ?: return@mapNotNull null
