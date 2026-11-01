@@ -114,7 +114,7 @@ adb shell input keyevent KEYCODE_BACK
 sleep 2
 tap_text "Berita" last
 wait_text "~headline aktif" 60
-sleep 6
+sleep 15 # let the article photos finish downloading
 shot 4-berita
 
 tap_text "~yang lalu"
