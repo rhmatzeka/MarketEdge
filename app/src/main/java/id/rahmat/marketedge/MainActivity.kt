@@ -4,8 +4,6 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
@@ -19,10 +17,8 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.net.Uri
 import android.text.Editable
-import android.text.Html
 import android.text.TextUtils
 import android.text.TextWatcher
-import android.util.LruCache
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
@@ -42,7 +38,10 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import id.rahmat.marketedge.data.ai.WarrenAi
 import id.rahmat.marketedge.data.api.MarketNewsClient
+import id.rahmat.marketedge.data.api.fetchArticleText
+import id.rahmat.marketedge.data.api.formatPercent
 import id.rahmat.marketedge.data.api.PublicApiClient
 import id.rahmat.marketedge.data.local.UserStore
 import id.rahmat.marketedge.data.repository.RealMarketEdgeRepository
@@ -56,6 +55,7 @@ import id.rahmat.marketedge.presentation.components.card
 import id.rahmat.marketedge.presentation.components.chip
 import id.rahmat.marketedge.presentation.components.dp
 import id.rahmat.marketedge.presentation.components.editText
+import id.rahmat.marketedge.presentation.components.ImageLoader
 import id.rahmat.marketedge.presentation.components.horizontalChips
 import id.rahmat.marketedge.presentation.components.iconButton
 import id.rahmat.marketedge.presentation.components.rounded
@@ -64,15 +64,16 @@ import id.rahmat.marketedge.presentation.components.screenScroll
 import id.rahmat.marketedge.presentation.components.sectionHeader
 import id.rahmat.marketedge.presentation.components.text
 import id.rahmat.marketedge.presentation.components.topBar
-import java.net.HttpURLConnection
-import java.net.URL
+import id.rahmat.marketedge.presentation.voice.aiQuestionFromSpeech
+import id.rahmat.marketedge.presentation.voice.commandContains
+import id.rahmat.marketedge.presentation.voice.extractVoiceNumber
+import id.rahmat.marketedge.presentation.voice.normalizeVoiceCommand
+import id.rahmat.marketedge.presentation.voice.shortSpeech
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import org.json.JSONArray
-import org.json.JSONObject
 
 private const val NOTIFICATION_PERMISSION_REQUEST = 10
 private const val AUDIO_PERMISSION_REQUEST = 20
@@ -91,11 +92,9 @@ class MainActivity : AppCompatActivity() {
     private val userStore by lazy { UserStore(applicationContext) }
     // Several workers so a slow market refresh does not hold up news, charts or AI answers.
     private val executor: ExecutorService = Executors.newFixedThreadPool(4)
-    private val imageExecutor: ExecutorService = Executors.newFixedThreadPool(3)
+    private val imageLoader = ImageLoader()
+    private val warrenAi = WarrenAi(BuildConfig.AI_API_KEY, BuildConfig.AI_BASE_URL, BuildConfig.AI_MODEL)
     private val handler = Handler(Looper.getMainLooper())
-    private val imageCache = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 8).toInt()) {
-        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
-    }
     private val articleContentCache = ConcurrentHashMap<String, String>()
     private val articleContentErrors = ConcurrentHashMap<String, String>()
     private val articleContentLoading = ConcurrentHashMap<String, Boolean>()
@@ -256,7 +255,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         executor.shutdownNow()
-        imageExecutor.shutdownNow()
+        imageLoader.shutdown()
         speechRecognizer?.destroy()
         textToSpeech?.stop()
         textToSpeech?.shutdown()
@@ -891,57 +890,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun moreVoiceGuide(): String =
         "Layar Lainnya. Ada profil, rekomendasi upgrade, akses cepat Kalender, WarrenAI, Temukan Broker Terbaik, dan Saham Undervalued. Ada juga monitor Peringatan, Item Tersimpan, Sentimen Saya, Versi Bebas Iklan, dan About App. Ucapkan buka AI, kalender, broker, saham undervalued, about app, upgrade, atau kembali."
-
-    private fun normalizeVoiceCommand(value: String): String = value
-        .lowercase(Locale("id", "ID"))
-        .replace(Regex("[^a-z0-9\\s]"), " ")
-        .replace(Regex("\\s+"), " ")
-        .trim()
-
-    private fun commandContains(command: String, vararg keywords: String): Boolean {
-        val padded = " $command "
-        return keywords.any { padded.contains(" $it ") }
-    }
-
-    private fun extractVoiceNumber(command: String): Int? {
-        Regex("\\b([0-9]{1,2})\\b").find(command)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
-        val words = mapOf(
-            "satu" to 1,
-            "pertama" to 1,
-            "dua" to 2,
-            "kedua" to 2,
-            "tiga" to 3,
-            "ketiga" to 3,
-            "empat" to 4,
-            "keempat" to 4,
-            "lima" to 5,
-            "kelima" to 5,
-            "enam" to 6,
-            "keenam" to 6,
-            "tujuh" to 7,
-            "ketujuh" to 7,
-            "delapan" to 8,
-            "kedelapan" to 8,
-            "sembilan" to 9,
-            "kesembilan" to 9,
-            "sepuluh" to 10,
-            "kesepuluh" to 10
-        )
-        return words.firstNotNullOfOrNull { (word, number) -> number.takeIf { Regex("\\b$word\\b").containsMatchIn(command) } }
-    }
-
-    private fun aiQuestionFromSpeech(spoken: String): String {
-        val lower = spoken.lowercase(Locale("id", "ID"))
-        val prefixes = listOf("tanyakan ai", "tanya ai", "kirim ai", "bertanya ai")
-        val prefix = prefixes.firstOrNull { lower.contains(it) } ?: return ""
-        val start = lower.indexOf(prefix) + prefix.length
-        return spoken.drop(start).trim().removePrefix("tentang").trim()
-    }
-
-    private fun shortSpeech(value: String, maxLength: Int): String =
-        value.replace(Regex("\\s+"), " ").trim().let { clean ->
-            if (clean.length <= maxLength) clean else clean.take(maxLength).substringBeforeLast(" ").ifBlank { clean.take(maxLength) }
-        }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -1817,60 +1765,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun fetchArticleText(url: String): String {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 10_000
-            readTimeout = 10_000
-            setRequestProperty("User-Agent", "Mozilla/5.0 MarketEdge Android")
-            setRequestProperty("Accept", "text/html,application/xhtml+xml")
-        }
-        return try {
-            if (connection.responseCode !in 200..299) error("HTTP ${connection.responseCode}")
-            val html = connection.inputStream.bufferedReader().use { it.readText() }
-            extractReadableArticle(html)
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun extractReadableArticle(html: String): String {
-        val articleHtml = Regex(
-            "<article[\\s\\S]*?</article>",
-            setOf(RegexOption.IGNORE_CASE)
-        ).find(html)?.value ?: html
-        val withoutNoise = articleHtml
-            .replace(Regex("<script[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), " ")
-            .replace(Regex("<style[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), " ")
-            .replace(Regex("<nav[\\s\\S]*?</nav>", RegexOption.IGNORE_CASE), " ")
-            .replace(Regex("<footer[\\s\\S]*?</footer>", RegexOption.IGNORE_CASE), " ")
-            .replace(Regex("<aside[\\s\\S]*?</aside>", RegexOption.IGNORE_CASE), " ")
-        val paragraphs = Regex("<p\\b[^>]*>([\\s\\S]*?)</p>", RegexOption.IGNORE_CASE)
-            .findAll(withoutNoise)
-            .map { htmlToText(it.groupValues[1]) }
-            .filter { paragraph ->
-                paragraph.length >= 45 &&
-                    !paragraph.contains("cookie", ignoreCase = true) &&
-                    !paragraph.contains("subscribe", ignoreCase = true) &&
-                    !paragraph.contains("advertisement", ignoreCase = true)
-            }
-            .distinct()
-            .take(12)
-            .toList()
-        if (paragraphs.isEmpty()) error("paragraf artikel tidak ditemukan")
-        return paragraphs.joinToString("\n\n")
-    }
-
-    private fun htmlToText(value: String): String {
-        val withBreaks = value
-            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
-            .replace(Regex("</(div|section|li|h\\d)>", RegexOption.IGNORE_CASE), "\n")
-        return Html.fromHtml(withBreaks, Html.FROM_HTML_MODE_LEGACY)
-            .toString()
-            .replace(Regex("[ \\t]+"), " ")
-            .replace(Regex("\\n{3,}"), "\n\n")
-            .trim()
-    }
-
     private fun cleanSummary(article: NewsArticle): String =
         article.content
             .replace("[...]", "")
@@ -1907,48 +1801,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadArticleImage(article: NewsArticle, imageView: ImageView) {
         val url = article.imageUrl?.takeIf { it.startsWith("https://") } ?: return
-        imageView.tag = url
-        imageCache[url]?.let {
-            imageView.setImageBitmap(it)
-            return
-        }
-        imageExecutor.execute {
-            val bitmap = runCatching { downloadBitmap(url) }.getOrNull() ?: return@execute
-            imageCache.put(url, bitmap)
-            onUi {
-                if (imageView.tag == url) imageView.setImageBitmap(bitmap)
-            }
-        }
-    }
-
-    private fun downloadBitmap(url: String): Bitmap? {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 8_000
-            readTimeout = 8_000
-            setRequestProperty("User-Agent", "MarketEdge Android")
-        }
-        return try {
-            if (connection.responseCode !in 200..299) return null
-            val bytes = connection.inputStream.use { it.readBytes() }
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-            val options = BitmapFactory.Options().apply {
-                inSampleSize = bitmapSampleSize(bounds.outWidth, bounds.outHeight, 1200, 800)
-                inPreferredConfig = Bitmap.Config.RGB_565
-            }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun bitmapSampleSize(width: Int, height: Int, maxWidth: Int, maxHeight: Int): Int {
-        if (width <= 0 || height <= 0) return 1
-        var sample = 1
-        while ((width / sample) > maxWidth || (height / sample) > maxHeight) {
-            sample *= 2
-        }
-        return sample.coerceAtLeast(1)
+        imageLoader.load(url, imageView)
     }
 
     private fun actionButton(label: String, onClick: (View) -> Unit): TextView =
@@ -3498,12 +3351,14 @@ class MainActivity : AppCompatActivity() {
         chatMessages.add(ChatMessage(UUID.randomUUID().toString(), "Menganalisis data terbaru...", "Baru saja", false))
         if (activeAiSurface == AiSurface.PAGE) pendingIdeasChatScroll = true
         renderActiveAiSurface()
+        val assets = marketAssets
+        val news = newsArticles
         executor.execute {
-            val answer = runCatching { answerWithConfiguredAi(query) }
+            val answer = runCatching { warrenAi.answer(query, assets, news) }
             onUi {
                 chatMessages.removeLastOrNull()
                 chatMessages.add(answer.getOrElse {
-                    localAiAnswer(query, friendlyAiError(it.message.orEmpty()))
+                    warrenAi.localAnswer(query, assets, news, warrenAi.friendlyError(it.message.orEmpty()))
                 })
                 if (screenId == "ideas" || screenId == "aichat") {
                     if (activeAiSurface == AiSurface.PAGE) pendingIdeasChatScroll = true
@@ -3553,176 +3408,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderActiveAiSurface() {
         if (activeAiSurface == AiSurface.FULLSCREEN) renderAiChat() else renderIdeas()
-    }
-
-    private fun answerWithConfiguredAi(query: String): ChatMessage {
-        if (BuildConfig.AI_API_KEY.isBlank()) return localAiAnswer(query)
-        val response = runCatching { requestAiCompletion(query) }.getOrElse {
-            return localAiAnswer(query, friendlyAiError(it.message.orEmpty()))
-        }
-        return ChatMessage(
-            id = UUID.randomUUID().toString(),
-            text = sanitizeAiText(response),
-            timestamp = "Baru saja",
-            fromUser = false,
-            recommendations = marketAssets.sortedByDescending { kotlin.math.abs(it.changePercent) }.take(3),
-            relatedNews = newsArticles.take(2)
-        )
-    }
-
-    private fun localAiAnswer(query: String, notice: String? = null): ChatMessage {
-        val strongest = marketAssets.maxByOrNull { it.changePercent }
-        val weakest = marketAssets.minByOrNull { it.changePercent }
-        val latest = newsArticles.firstOrNull()
-        val titleFromQuestion = Regex("\"([^\"]+)\"").find(query)?.groupValues?.getOrNull(1)
-        val focusTitle = titleFromQuestion ?: latest?.title
-        val text = buildString {
-            if (notice != null) {
-                append(notice)
-                append("\n\n")
-            } else {
-                append("Saya pakai data market dan headline yang sudah dimuat aplikasi.\n\n")
-            }
-            append("Kesimpulan:\n")
-            append(
-                if (focusTitle != null) {
-                    "Berita \"$focusTitle\" lebih dulu dibaca sebagai pemicu sentimen. Dampaknya ke harga belum otomatis pasti, jadi perlu dicek bersama pergerakan aset.\n\n"
-                } else {
-                    "Belum ada headline yang cukup spesifik. Analisis ini memakai pergerakan aset terbaru sebagai konteks awal.\n\n"
-                }
-            )
-            append("Aset yang perlu dipantau:\n")
-            if (strongest != null && weakest != null) {
-                append("${strongest.symbol} sedang paling kuat (${formatPercent(strongest.changePercent)}). ")
-                append("${weakest.symbol} sedang paling lemah (${formatPercent(weakest.changePercent)}).\n\n")
-            } else {
-                append("Data aset masih dimuat, jadi belum bisa menentukan penggerak terkuat dan terlemah.\n\n")
-            }
-            append("Cara membacanya:\n")
-            append("Kalau berita memengaruhi minat risiko global, aset berisiko seperti kripto bisa ikut bergerak. Kalau beritanya hanya spesifik sektor, efeknya bisa kecil atau terlambat.\n\n")
-            append("Risiko:\n")
-            append("Jangan anggap satu headline sebagai penyebab tunggal. Cocokkan dengan volume, arah market utama, dan berita lanjutan. Ini ringkasan awal, bukan saran investasi personal.")
-        }
-        return ChatMessage(
-            id = UUID.randomUUID().toString(),
-            text = sanitizeAiText(text),
-            timestamp = "Baru saja",
-            fromUser = false,
-            recommendations = marketAssets.sortedByDescending { kotlin.math.abs(it.changePercent) }.take(3),
-            relatedNews = newsArticles.take(2)
-        )
-    }
-
-    private fun requestAiCompletion(query: String): String {
-        val payload = JSONObject().apply {
-            put("model", BuildConfig.AI_MODEL)
-            put("messages", JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "system")
-                    put("content", "Kamu adalah analis market MarketEdge. Jawab dalam Bahasa Indonesia yang jelas dan ringkas. Jangan pakai markdown, tanda bintang, bullet simbol, tabel, emoji, atau format tebal. Gunakan label teks biasa: Kesimpulan, Dampak, Aset yang dipantau, Risiko. Maksimal 5 paragraf pendek. Jelaskan hubungan berita ke aset dengan hati-hati dan jangan memberi saran investasi personal.")
-                })
-                put(JSONObject().apply {
-                    put("role", "user")
-                    put("content", buildAiContext(query))
-                })
-            })
-            put("temperature", 0.4)
-        }
-        val connection = (URL(BuildConfig.AI_BASE_URL).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 20_000
-            readTimeout = 30_000
-            doOutput = true
-            setRequestProperty("Authorization", "Bearer ${BuildConfig.AI_API_KEY}")
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        return try {
-            connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-            val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
-            val body = stream.bufferedReader().use { it.readText() }
-            if (connection.responseCode !in 200..299) error(parseAiError(connection.responseCode, body))
-            sanitizeAiText(JSONObject(body)
-                .getJSONArray("choices")
-                .getJSONObject(0)
-                .getJSONObject("message")
-                .getString("content")
-                .trim())
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun sanitizeAiText(value: String): String {
-        val withoutMarkdown = value
-            .replace(Regex("""\*\*(.*?)\*\*"""), "$1")
-            .replace(Regex("""__(.*?)__"""), "$1")
-            .replace(Regex("""`([^`]*)`"""), "$1")
-            .replace("*", "")
-            .replace("#", "")
-            .replace("•", "")
-        return withoutMarkdown
-            .lines()
-            .map { line ->
-                line.trim()
-                    .replace(Regex("""^[-]+[\s]+"""), "")
-                    .replace(Regex("""^[0-9]+[.)][\s]*"""), "")
-            }
-            .filter { it.isNotBlank() }
-            .joinToString("\n\n")
-            .trim()
-    }
-
-    private fun parseAiError(code: Int, body: String): String {
-        val parsed = runCatching {
-            val error = JSONObject(body).getJSONObject("error")
-            val type = error.optString("type")
-            val message = error.optString("message")
-            when {
-                type == "insufficient_quota" -> "Kuota AI habis atau billing belum aktif."
-                message.isNotBlank() -> message
-                else -> "AI HTTP $code"
-            }
-        }.getOrDefault("AI HTTP $code")
-        return parsed
-    }
-
-    private fun friendlyAiError(message: String): String = when {
-        message.contains("insufficient_quota", ignoreCase = true) ||
-            message.contains("Kuota AI habis", ignoreCase = true) ->
-            "Layanan AI sedang tidak tersedia. Saya pakai analisis lokal dari data aplikasi."
-        message.contains("429") ->
-            "AI sedang membatasi request atau kuota akun habis."
-        message.contains("401") || message.contains("invalid", ignoreCase = true) ->
-            "Layanan AI belum bisa dipakai. Saya pakai analisis lokal dari data aplikasi."
-        message.isBlank() ->
-            "AI online belum bisa dihubungi."
-        else ->
-            "AI online belum bisa dipakai: ${message.take(120)}"
-    }
-
-    private fun buildAiContext(query: String): String = buildString {
-        appendLine("Pertanyaan user: $query")
-        appendLine("Format jawaban wajib:")
-        appendLine("Kesimpulan: satu kalimat paling penting.")
-        appendLine("Dampak: jelaskan pengaruh berita ke sentimen atau aset secara hati-hati.")
-        appendLine("Aset yang dipantau: sebutkan aset relevan dari data aplikasi.")
-        appendLine("Risiko: sebutkan batasan analisis. Tanpa markdown, tanpa tanda bintang, tanpa bullet simbol.")
-        appendLine()
-        appendLine("Data market terbaru:")
-        marketAssets.take(20).forEach {
-            appendLine("- ${it.symbol} ${it.name}: ${it.price}, perubahan ${formatPercent(it.changePercent)}, kategori ${it.category}")
-        }
-        appendLine()
-        appendLine("Headline berita terbaru:")
-        newsArticles.take(8).forEach {
-            appendLine("- ${it.title} (${it.source}, ${it.timeAgo}) ringkasan: ${it.summary}")
-        }
-    }
-
-    private fun formatPercent(value: Double): String {
-        val sign = if (value >= 0) "+" else ""
-        return "$sign${String.format(java.util.Locale("id", "ID"), "%.2f", value)}%"
     }
 
     private enum class AiSurface {

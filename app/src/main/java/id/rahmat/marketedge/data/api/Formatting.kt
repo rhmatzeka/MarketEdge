@@ -73,3 +73,9 @@ internal fun <T> List<T>.downsample(max: Int): List<T> {
     val step = (size - 1).toDouble() / (max - 1)
     return List(max) { index -> this[(index * step).toInt().coerceAtMost(lastIndex)] }
 }
+
+/** "+1,23%" / "-0,80%". */
+internal fun formatPercent(value: Double): String {
+    val sign = if (value >= 0) "+" else ""
+    return "$sign${String.format(ID_LOCALE, "%.2f", value)}%"
+}
