@@ -125,14 +125,15 @@ shot 5-artikel
 tap_text "AI" last
 wait_text "Aset Pilihan AI"
 sleep 4
-# The suggestion chips sit below the fold: scroll until they show up.
+# The suggestion chips sit below the fold: scroll until they show up. The chip row
+# scrolls sideways too, so use one of the first chips.
 for _ in 1 2 3 4 5; do
   dump
-  [ -n "$(center "Ringkas market hari ini")" ] && break
-  adb shell input swipe 540 1700 540 700 400
+  [ -n "$(center "Aset mana yang paling kuat?")" ] && break
+  adb shell input swipe 540 1600 540 1000 400
   sleep 1
 done
-tap_text "Ringkas market hari ini" first 6
+tap_text "Aset mana yang paling kuat?" first 6
 shot 6-warrenai
 
 tap_text "Watchlist" last
