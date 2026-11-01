@@ -1,16 +1,10 @@
 package id.rahmat.marketedge.data.api
 
-import android.graphics.Color
-import id.rahmat.marketedge.domain.model.AssetTag
 import id.rahmat.marketedge.domain.model.MarketDetailStats
 import id.rahmat.marketedge.domain.model.MarketAsset
 import id.rahmat.marketedge.domain.model.NewsArticle
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -21,6 +15,12 @@ import kotlin.math.abs
 
 class PublicApiClient {
     private val idLocale = Locale("id", "ID")
+    private val yahoo = YahooFinanceClient()
+    private val news = MarketNewsClient()
+
+    fun fetchYahooMarkets(): List<MarketAsset> = yahoo.fetchMarkets()
+
+    fun fetchMarketNews(): List<NewsArticle> = news.fetchLatest()
 
     fun fetchCoinGeckoMarkets(): List<MarketAsset> {
         val endpoint = "https://api.coingecko.com/api/v3/coins/markets" +
@@ -118,32 +118,8 @@ class PublicApiClient {
         }
     }
 
-    fun fetchSpaceflightNews(limit: Int = 20): List<NewsArticle> {
-        val json = request("https://api.spaceflightnewsapi.net/v4/articles/?limit=$limit")
-        val results = JSONObject(json).getJSONArray("results")
-        return List(results.length()) { index ->
-            val item = results.getJSONObject(index)
-            val title = item.optString("title").trim()
-            val source = item.optString("news_site", "Spaceflight News")
-            val published = item.optString("published_at")
-            NewsArticle(
-                id = item.optInt("id", index).toString(),
-                title = title,
-                source = source,
-                timeAgo = relativeTime(published),
-                category = inferNewsCategory(title, source),
-                summary = item.optString("summary").trim(),
-                content = item.optString("summary").trim(),
-                imageColor = colorFor(title.ifBlank { source }),
-                tags = emptyList<AssetTag>(),
-                isPro = false,
-                sourceUrl = item.optString("url"),
-                imageUrl = item.optString("image_url")
-            )
-        }.filter { it.title.isNotBlank() }
-    }
-
     fun fetchMarketChart(asset: MarketAsset, days: Int): List<Float> {
+        if (asset.source == YahooFinanceClient.SOURCE) return yahoo.fetchChart(asset, days)
         if (asset.category == "Kripto" && !asset.chartId.isNullOrBlank()) {
             val json = request(
                 "https://api.coingecko.com/api/v3/coins/${asset.chartId}/market_chart" +
@@ -164,6 +140,7 @@ class PublicApiClient {
     }
 
     fun fetchMarketDetailStats(asset: MarketAsset): MarketDetailStats {
+        if (asset.source == YahooFinanceClient.SOURCE) return yahoo.fetchDetailStats(asset)
         if (asset.category == "Kripto" && !asset.chartId.isNullOrBlank()) {
             val detail = JSONObject(
                 request(
@@ -222,35 +199,7 @@ class PublicApiClient {
         )
     }
 
-    private fun inferNewsCategory(title: String, source: String): String {
-        val text = "$title $source".lowercase(Locale.US)
-        return when {
-            "nasa" in text -> "NASA"
-            "spacex" in text || "starship" in text || "falcon" in text -> "SpaceX"
-            "policy" in text || "china" in text || "europe" in text || "india" in text || "japan" in text -> "World"
-            "science" in text || "technology" in text || "cargo" in text || "station" in text -> "Technology"
-            else -> "Real News"
-        }
-    }
-
-    private fun request(url: String): String {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 10_000
-            readTimeout = 10_000
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "MarketEdge Android")
-        }
-        return try {
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.let { BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader -> reader.readText() } }.orEmpty()
-            if (code !in 200..299) error("HTTP $code: ${body.take(200)}")
-            body
-        } finally {
-            connection.disconnect()
-        }
-    }
+    private fun request(url: String): String = Http.get(url)
 
     private fun fetchCoinbaseBidAsk(symbol: String): Pair<Double, Double>? {
         val json = request("https://api.exchange.coinbase.com/products/${symbol.uppercase(Locale.US)}-USD/book?level=1")
@@ -393,17 +342,6 @@ class PublicApiClient {
         }.format(date)
     }
 
-    private fun relativeTime(iso: String): String {
-        val date = parseIso(iso) ?: return "baru saja"
-        val minutes = ((System.currentTimeMillis() - date.time) / 60_000).coerceAtLeast(0)
-        return when {
-            minutes < 1 -> "baru saja"
-            minutes < 60 -> "$minutes menit yang lalu"
-            minutes < 24 * 60 -> "${minutes / 60} jam yang lalu"
-            else -> "${minutes / (24 * 60)} hari yang lalu"
-        }
-    }
-
     private fun parseIso(iso: String): Date? {
         val normalized = iso.replace(Regex("\\.\\d+Z$"), "Z")
         return runCatching {
@@ -411,17 +349,6 @@ class PublicApiClient {
                 timeZone = TimeZone.getTimeZone("UTC")
             }.parse(normalized)
         }.getOrNull()
-    }
-
-    private fun colorFor(seed: String): Int {
-        val colors = intArrayOf(
-            Color.rgb(255, 107, 0),
-            Color.rgb(55, 114, 207),
-            Color.rgb(27, 166, 115),
-            Color.rgb(195, 125, 13),
-            Color.rgb(212, 86, 86)
-        )
-        return colors[abs(seed.hashCode()) % colors.size]
     }
 
     private fun lastDates(count: Int, endDate: String? = null): List<String> {

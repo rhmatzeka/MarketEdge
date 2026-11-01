@@ -1,6 +1,6 @@
 # MarketEdge
 
-An Android app for following markets and financial news, in the style of Investing.com. It shows live crypto, forex, and gold prices, detailed charts, the latest headlines, your watchlist, and **WarrenAI**, a chat assistant that answers questions using the market data and news the app just loaded.
+An Android app for following markets and financial news, in the style of Investing.com. It shows live stocks (IDX and US), indices, index futures, crypto, forex, gold, and oil prices, detailed charts, the latest headlines, your watchlist, and **WarrenAI**, a chat assistant that answers questions using the market data and news the app just loaded.
 
 ## Download
 
@@ -14,7 +14,7 @@ Open the file on your phone and allow "Install unknown apps" if Android asks. Ev
 - **Instrument details**: a real price chart with time ranges, plus Overview, Technical, News, Analysis, and Data tabs
 - **Key stats**: bid/ask, daily range, 52-week range, previous close, open, 24h volume, market cap, rank, and circulating supply
 - **News**: latest headlines with a detail page, image, share button, link to the source, and an "ask the AI about this" option
-- **Watchlist** with an edit mode and an asset picker
+- **Watchlist** with an edit mode and an asset picker, saved on the device together with your saved articles and account
 - **WarrenAI chat** that works even without an API key (see below)
 - Dark theme with orange accents and an animated splash screen
 
@@ -24,10 +24,11 @@ All feeds are public and free:
 
 | Data | Source |
 | --- | --- |
+| Stocks (IDX and US), indices, index futures, oil and gas | Yahoo Finance chart API |
 | Crypto prices, chart history, and market stats | CoinGecko |
 | Crypto bid/ask | Coinbase public order book |
 | Forex, gold, and silver | A public currency feed |
-| News headlines | Spaceflight News API |
+| Market news (Indonesian) | CNBC Indonesia market RSS |
 
 If a feed is down, the app shows a loading, error, or retry state and falls back to data it already loaded.
 
